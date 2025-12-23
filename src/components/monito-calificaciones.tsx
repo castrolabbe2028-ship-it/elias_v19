@@ -5,6 +5,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { Sparkles, Brain, TrendingUp, BookOpen, Award, Heart, Zap } from 'lucide-react';
 import { useAuth } from '@/contexts/auth-context';
 import { useLanguage } from '@/contexts/language-context';
+import { useGradesSQL } from '@/hooks/useGradesSQL';
 
 interface Sugerencia {
   texto: string;
@@ -19,6 +20,7 @@ interface Sugerencia {
 export default function MonitoCalificaciones() {
   const { user } = useAuth();
   const { language } = useLanguage();
+  const { getGradesByYear } = useGradesSQL();
 
   const [sugerenciaActual, setSugerenciaActual] = useState<Sugerencia | null>(null);
   const [isHovered, setIsHovered] = useState(false);
@@ -38,6 +40,11 @@ export default function MonitoCalificaciones() {
   const [cachedAllGrades, setCachedAllGrades] = useState<any[] | null>(null);
   const [lastFetchAllTime, setLastFetchAllTime] = useState<number>(0);
   const [analysisYear, setAnalysisYear] = useState<number | null>(null);
+  
+  // === ESTADOS PARA APODERADO CON MÚLTIPLES HIJOS ===
+  const [guardianStudents, setGuardianStudents] = useState<any[]>([]); // Lista de estudiantes asignados
+  const [showStudentSelector, setShowStudentSelector] = useState(false); // Mostrar selector
+  const [selectedStudentForAnalysis, setSelectedStudentForAnalysis] = useState<any>(null); // Estudiante seleccionado
 
   useEffect(() => setMounted(true), []);
   
@@ -66,38 +73,278 @@ export default function MonitoCalificaciones() {
       const cacheValid = cachedGrades && !forceRefresh && (now - lastFetchTime < 60000);
       if (cacheValid) return cachedGrades;
 
-      const { firestoreDB } = await import('@/lib/firestore-database');
-      const { isFirebaseEnabled } = await import('@/lib/sql-config');
-      const currentYear = new Date().getFullYear();
-      if (!isFirebaseEnabled()) return [];
+      // Usar el mismo año seleccionado por la app (fallback: año actual)
+      const selectedYear = Number(localStorage.getItem('admin-selected-year') || new Date().getFullYear());
+      const grades = await getGradesByYear(selectedYear);
+      console.log(`🐵 [Monito] Cargando ${grades?.length || 0} calificaciones vía useGradesSQL (año ${selectedYear})`);
 
-      const grades = await firestoreDB.getGradesByYear(currentYear);
+      if (!grades || grades.length === 0) {
+        console.warn('🐵 [Monito] No se encontraron calificaciones en ninguna fuente');
+        setCachedGrades([]);
+        setLastFetchTime(now);
+        return [];
+      }
 
-      // Normalizadores
+      // Normalizadores robustos
       const normalizar = (t?: string) => (t||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/�/g,'').replace(/[^a-z0-9\s]/g,'').trim();
+      const normRut = (r?: string) => (r||'').replace(/\./g,'').replace(/-/g,'').toLowerCase().trim();
       const extractFirst = (n?: string) => (n||'').split(' ')[0].toLowerCase();
+      
+      const userId = String(user?.id || '').toLowerCase().trim();
+      const userUsername = String(user?.username || '').toLowerCase().trim();
+      const userRut = normRut(user?.rut);
       const userNameNorm = normalizar(user?.displayName);
       const userFirstNorm = normalizar(extractFirst(user?.displayName));
       const userEmailNorm = normalizar(user?.email);
 
+      console.log(`🐵 [Monito] Buscando calificaciones para: id=${userId}, username=${userUsername}, rut=${userRut}, name=${userNameNorm}`);
+
       const userGrades = grades.filter((g: any) => {
-        const studentNameNorm = normalizar(g.studentName || g.student);
-        const studentEmailNorm = normalizar(g.studentEmail || g.email);
-        return (
-          (user?.rut && g.studentId === user.rut) ||
-          g.studentId === user?.username || g.studentId === user?.id ||
-          g.studentName === user?.displayName || g.student === user?.displayName ||
-          g.studentEmail === user?.email || g.email === user?.email ||
-          (studentNameNorm && (studentNameNorm.includes(userNameNorm) || userNameNorm.includes(studentNameNorm))) ||
-          (studentNameNorm && studentNameNorm.startsWith(userFirstNorm)) ||
-          (studentEmailNorm && userEmailNorm && studentEmailNorm === userEmailNorm)
+        const gStudentId = String(g.studentId || '').toLowerCase().trim();
+        const gStudentUsername = String(g.studentUsername || g.username || '').toLowerCase().trim();
+        const gStudentRut = normRut(g.studentRut || g.rut);
+        const gStudentName = normalizar(g.studentName || g.student || g.nombre);
+        const gStudentEmail = normalizar(g.studentEmail || g.email);
+
+        // Match por ID, username o RUT
+        const matchById = userId && (gStudentId === userId || gStudentUsername === userId);
+        const matchByUsername = userUsername && (gStudentId === userUsername || gStudentUsername === userUsername);
+        const matchByRut = userRut && (gStudentId === userRut || gStudentRut === userRut);
+        
+        // Match por nombre (parcial)
+        const matchByName = userNameNorm && gStudentName && (
+          gStudentName.includes(userNameNorm) || 
+          userNameNorm.includes(gStudentName) ||
+          gStudentName.startsWith(userFirstNorm)
         );
+        
+        // Match por email
+        const matchByEmail = userEmailNorm && gStudentEmail && gStudentEmail === userEmailNorm;
+
+        return matchById || matchByUsername || matchByRut || matchByName || matchByEmail;
       });
+
+      console.log(`🐵 [Monito] Encontradas ${userGrades.length} calificaciones para el usuario`);
 
       setCachedGrades(userGrades);
       setLastFetchTime(now);
       return userGrades;
     } catch (e) {
+      console.error('🐵 [Monito] Error general obteniendo calificaciones:', e);
+      return [];
+    }
+  };
+
+  // === HELPER: Obtener lista de estudiantes asignados al apoderado con sus datos completos ===
+  const obtenerEstudiantesApoderado = async (): Promise<any[]> => {
+    try {
+      const selectedYear = Number(localStorage.getItem('admin-selected-year') || new Date().getFullYear());
+      let assignedStudentIds: string[] = [];
+
+      const { LocalStorageManager } = await import('@/lib/education-utils');
+      
+      // Buscar en guardians del año
+      const guardiansForYear = LocalStorageManager.getGuardiansForYear(selectedYear) || [];
+      const guardianFromYear = guardiansForYear.find((g: any) => 
+        String(g.id) === String(user?.id) || 
+        String(g.username || '').toLowerCase() === String(user?.username || '').toLowerCase()
+      );
+      if (guardianFromYear?.studentIds?.length) {
+        assignedStudentIds = guardianFromYear.studentIds.map((id: any) => String(id));
+      }
+
+      // Buscar en relaciones guardian-student
+      if (assignedStudentIds.length === 0) {
+        const relations = LocalStorageManager.getGuardianStudentRelationsForYear(selectedYear) || [];
+        assignedStudentIds = relations
+          .filter((rel: any) => 
+            String(rel.guardianId) === String(user?.id) || 
+            String(rel.guardianUsername || '').toLowerCase() === String(user?.username || '').toLowerCase()
+          )
+          .map((rel: any) => String(rel.studentId));
+      }
+
+      // Buscar en smart-student-users
+      if (assignedStudentIds.length === 0) {
+        const loadJson = <T,>(key: string, def: T): T => {
+          try { const v = localStorage.getItem(key); return v ? JSON.parse(v) : def; } catch { return def; }
+        };
+        const usersData = loadJson<any[]>('smart-student-users', []);
+        const fullUserData = usersData.find((u: any) => 
+          String(u.username || '').toLowerCase() === String(user?.username || '').toLowerCase()
+        );
+        if (fullUserData?.studentIds?.length) {
+          assignedStudentIds = fullUserData.studentIds.map((id: any) => String(id));
+        }
+      }
+
+      if (assignedStudentIds.length === 0) {
+        console.warn('🐵 [Monito] No se encontraron estudiantes asignados al apoderado');
+        return [];
+      }
+
+      // Obtener datos completos de los estudiantes
+      const allStudents = LocalStorageManager.getStudentsForYear(selectedYear) || [];
+      const loadJson = <T,>(key: string, def: T): T => {
+        try { const v = localStorage.getItem(key); return v ? JSON.parse(v) : def; } catch { return def; }
+      };
+      const legacyUsers = loadJson<any[]>('smart-student-users', []).filter((u: any) => u.role === 'student' || u.role === 'estudiante');
+      const combinedUsers = [...allStudents, ...legacyUsers];
+
+      const normRut = (r?: string) => (r||'').replace(/\./g,'').replace(/-/g,'').toLowerCase().trim();
+      const assignedSet = new Set(assignedStudentIds.map(id => id.toLowerCase().trim()));
+      const assignedRutSet = new Set(assignedStudentIds.map(id => normRut(id)));
+
+      const students = combinedUsers.filter((u: any) => {
+        if (u.role !== 'student' && u.role !== 'estudiante') return false;
+        const uId = String(u.id || '').toLowerCase().trim();
+        const uUsername = String(u.username || '').toLowerCase().trim();
+        const uRut = normRut(u.rut);
+        return assignedSet.has(uId) || assignedSet.has(uUsername) || assignedRutSet.has(uId) || assignedRutSet.has(uRut);
+      });
+
+      // Eliminar duplicados por id
+      const uniqueStudents = Array.from(new Map(students.map(s => [String(s.id), s])).values());
+      
+      console.log(`🐵 [Monito] Estudiantes del apoderado:`, uniqueStudents.map(s => s.displayName || s.name || s.username));
+      return uniqueStudents;
+    } catch (e) {
+      console.error('🐵 [Monito] Error obteniendo estudiantes del apoderado:', e);
+      return [];
+    }
+  };
+
+  // === HELPER: Obtener calificaciones de un estudiante específico ===
+  const obtenerCalificacionesDeEstudiante = async (student: any): Promise<any[]> => {
+    try {
+      const selectedYear = Number(localStorage.getItem('admin-selected-year') || new Date().getFullYear());
+      const grades = await getGradesByYear(selectedYear);
+      
+      if (!grades || grades.length === 0) return [];
+
+      const normRut = (r?: string) => (r||'').replace(/\./g,'').replace(/-/g,'').toLowerCase().trim();
+      const studentId = String(student.id || '').toLowerCase().trim();
+      const studentUsername = String(student.username || '').toLowerCase().trim();
+      const studentRut = normRut(student.rut);
+      const studentName = String(student.displayName || student.name || '').toLowerCase().trim();
+
+      const studentGrades = grades.filter((g: any) => {
+        const gStudentId = String(g.studentId || '').toLowerCase().trim();
+        const gStudentUsername = String(g.studentUsername || g.username || '').toLowerCase().trim();
+        const gStudentRut = normRut(g.studentRut || g.rut);
+        const gStudentName = String(g.studentName || g.student || '').toLowerCase().trim();
+
+        return gStudentId === studentId || 
+               gStudentId === studentUsername ||
+               gStudentUsername === studentUsername ||
+               gStudentRut === studentRut ||
+               (studentName && gStudentName.includes(studentName));
+      });
+
+      console.log(`🐵 [Monito] Calificaciones de ${student.displayName || student.name}: ${studentGrades.length}`);
+      return studentGrades;
+    } catch (e) {
+      console.error('🐵 [Monito] Error obteniendo calificaciones del estudiante:', e);
+      return [];
+    }
+  };
+
+  // === NUEVO: Obtener calificaciones para APODERADO (hijos asignados) ===
+  const obtenerCalificacionesApoderado = async (forceRefresh = false) => {
+    try {
+      const now = Date.now();
+      const cacheValid = cachedGrades && !forceRefresh && (now - lastFetchTime < 60000);
+      if (cacheValid) return cachedGrades;
+
+      const selectedYear = Number(localStorage.getItem('admin-selected-year') || new Date().getFullYear());
+      let grades: any[] = [];
+      let assignedStudentIds: string[] = [];
+
+      // 1) Obtener estudiantes asignados al apoderado
+      try {
+        const { LocalStorageManager } = await import('@/lib/education-utils');
+        
+        // Buscar en guardians del año
+        const guardiansForYear = LocalStorageManager.getGuardiansForYear(selectedYear) || [];
+        const guardianFromYear = guardiansForYear.find((g: any) => 
+          String(g.id) === String(user?.id) || 
+          String(g.username || '').toLowerCase() === String(user?.username || '').toLowerCase()
+        );
+        if (guardianFromYear?.studentIds?.length) {
+          assignedStudentIds = guardianFromYear.studentIds.map((id: any) => String(id));
+        }
+
+        // Buscar en relaciones guardian-student
+        if (assignedStudentIds.length === 0) {
+          const relations = LocalStorageManager.getGuardianStudentRelationsForYear(selectedYear) || [];
+          assignedStudentIds = relations
+            .filter((rel: any) => 
+              String(rel.guardianId) === String(user?.id) || 
+              String(rel.guardianUsername || '').toLowerCase() === String(user?.username || '').toLowerCase()
+            )
+            .map((rel: any) => String(rel.studentId));
+        }
+
+        // Buscar en smart-student-users
+        if (assignedStudentIds.length === 0) {
+          const loadJson = <T,>(key: string, def: T): T => {
+            try { const v = localStorage.getItem(key); return v ? JSON.parse(v) : def; } catch { return def; }
+          };
+          const usersData = loadJson<any[]>('smart-student-users', []);
+          const fullUserData = usersData.find((u: any) => 
+            String(u.username || '').toLowerCase() === String(user?.username || '').toLowerCase()
+          );
+          if (fullUserData?.studentIds?.length) {
+            assignedStudentIds = fullUserData.studentIds.map((id: any) => String(id));
+          }
+        }
+
+        console.log(`🐵 [Monito Apoderado] Estudiantes asignados: ${assignedStudentIds.length}`, assignedStudentIds);
+      } catch (e) {
+        console.warn('🐵 [Monito Apoderado] Error buscando estudiantes asignados:', e);
+      }
+
+      if (assignedStudentIds.length === 0) {
+        console.warn('🐵 [Monito Apoderado] No se encontraron estudiantes asignados');
+        setCachedGrades([]);
+        setLastFetchTime(now);
+        return [];
+      }
+
+      // 2) Cargar calificaciones desde el backend dinámico (IndexedDB/Firebase)
+      grades = await getGradesByYear(selectedYear);
+      console.log(`🐵 [Monito Apoderado] ${grades?.length || 0} calificaciones vía useGradesSQL (año ${selectedYear})`);
+
+      if (!grades || grades.length === 0) {
+        console.warn('🐵 [Monito Apoderado] No hay calificaciones en ninguna fuente');
+        setCachedGrades([]);
+        setLastFetchTime(now);
+        return [];
+      }
+
+      // 4) Filtrar calificaciones de los hijos
+      const normRut = (r?: string) => (r||'').replace(/\./g,'').replace(/-/g,'').toLowerCase().trim();
+      const assignedSet = new Set(assignedStudentIds.map(id => id.toLowerCase().trim()));
+      const assignedRutSet = new Set(assignedStudentIds.map(id => normRut(id)));
+
+      const childGrades = grades.filter((g: any) => {
+        const gStudentId = String(g.studentId || '').toLowerCase().trim();
+        const gStudentUsername = String(g.studentUsername || g.username || '').toLowerCase().trim();
+        const gStudentRut = normRut(g.studentRut || g.rut);
+
+        return assignedSet.has(gStudentId) || 
+               assignedSet.has(gStudentUsername) || 
+               assignedRutSet.has(gStudentId) ||
+               assignedRutSet.has(gStudentRut);
+      });
+
+      console.log(`🐵 [Monito Apoderado] Encontradas ${childGrades.length} calificaciones para los hijos`);
+
+      setCachedGrades(childGrades);
+      setLastFetchTime(now);
+      return childGrades;
+    } catch (e) {
+      console.error('🐵 [Monito Apoderado] Error general:', e);
       return [];
     }
   };
@@ -109,45 +356,13 @@ export default function MonitoCalificaciones() {
       const cacheValid = cachedAllGrades && !forceRefresh && (now - lastFetchAllTime < 60000);
       if (cacheValid) return cachedAllGrades;
 
-  // Siempre usar el año actual del sistema como prioridad
-  const currentYear = new Date().getFullYear();
-
-      // 1) Preferir LocalStorage (rápido y sin red)
-      try {
-        const { LocalStorageManager } = await import('@/lib/education-utils');
-        let ls = LocalStorageManager.getTestGradesForYear(currentYear) || [];
-        if (!Array.isArray(ls) || ls.length === 0) {
-          // Fallback al último año con datos en LocalStorage
-          const years = LocalStorageManager.listYears();
-          for (const y of years) {
-            const arr = LocalStorageManager.getTestGradesForYear(y) || [];
-            if (Array.isArray(arr) && arr.length) {
-              ls = arr; setAnalysisYear(y); break;
-            }
-          }
-        } else {
-          setAnalysisYear(currentYear);
-        }
-        if (Array.isArray(ls) && ls.length) {
-          setCachedAllGrades(ls);
-          setLastFetchAllTime(now);
-          return ls;
-        }
-      } catch {}
-
-      // 2) Fallback a Firebase si está habilitado
-      try {
-        const { firestoreDB } = await import('@/lib/firestore-database');
-        const { isFirebaseEnabled } = await import('@/lib/sql-config');
-        if (isFirebaseEnabled()) {
-          const grades = await firestoreDB.getGradesByYear(currentYear);
-          const arr = Array.isArray(grades) ? grades : [];
-          setCachedAllGrades(arr);
-          setLastFetchAllTime(now);
-          setAnalysisYear(currentYear);
-          return arr;
-        }
-      } catch {}
+      // Año seleccionado por la app (fallback: año actual)
+      const selectedYear = Number(localStorage.getItem('admin-selected-year') || new Date().getFullYear());
+      const arr = await getGradesByYear(selectedYear);
+      setCachedAllGrades(Array.isArray(arr) ? arr : []);
+      setLastFetchAllTime(now);
+      setAnalysisYear(selectedYear);
+      return Array.isArray(arr) ? arr : [];
 
       setCachedAllGrades([]);
       setLastFetchAllTime(now);
@@ -319,6 +534,128 @@ export default function MonitoCalificaciones() {
       plan: [], 
       prioridades, 
       tips: tipsVariados 
+    };
+  };
+
+  // === VERSIÓN CON NOMBRE DEL ESTUDIANTE (para apoderados) ===
+  const analizarCalificacionesConNombre = async (calificaciones: any[], student: any): Promise<Sugerencia> => {
+    const nombre = student.displayName || student.name || student.username || 'tu hijo/a';
+    
+    if (!calificaciones?.length) {
+      return {
+        texto: language === 'es' 
+          ? `📚 Aún no hay calificaciones registradas para ${nombre}.` 
+          : `📚 No grades yet for ${nombre}.`,
+        tipo: 'motivacion',
+        icono: TrendingUp,
+        plan: []
+      };
+    }
+
+    interface CalificacionDetalle { materia: string; score: number; actividades: string[]; }
+    const detalle: CalificacionDetalle[] = [];
+    const map = new Map<string, number[]>();
+    let sum = 0, count = 0;
+
+    calificaciones.forEach((c: any) => {
+      const materiaRaw = c.subjectId || c.subjectName || c.subject || 'general';
+      const baseMateria = materiaRaw
+        .toString()
+        .replace(/[-_]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .split(' ')
+        .map((w:string)=> w.charAt(0).toUpperCase() + w.slice(1))
+        .join(' ');
+      const prettySubject = (name: string) => {
+        const key = name.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g,' ').trim();
+        const mapPretty: Record<string,string> = {
+          'matematica': 'Matemáticas', 'matematicas': 'Matemáticas',
+          'lenguaje y comunicacion': 'Lenguaje y Comunicación',
+          'educacion fisica': 'Educación Física', 'musica': 'Música',
+          'tecnologia': 'Tecnología', 'orientacion': 'Orientación',
+          'ingles': 'Inglés', 'artes visuales': 'Artes Visuales',
+          'ciencias naturales': 'Ciencias Naturales',
+          'historia geografia y ciencias sociales': 'Historia, Geografía y Ciencias Sociales',
+          'biologia': 'Biología', 'quimica': 'Química', 'fisica': 'Física',
+          'filosofia': 'Filosofía', 'educacion ciudadana': 'Educación Ciudadana'
+        };
+        return mapPretty[key] || name;
+      };
+      const materia = prettySubject(baseMateria);
+      const score = Number(c.score || 0);
+      const tema = c.topic || c.title || '';
+      if (score > 0) {
+        detalle.push({ materia, score, actividades: tema ? [tema] : [] });
+        if (!map.has(materia)) map.set(materia, []);
+        map.get(materia)!.push(score);
+        sum += score; count++;
+      }
+    });
+
+    const promedio = count ? sum / count : 0;
+    const materiasOrdenadas = Array.from(map.entries())
+      .map(([materia, arr]) => ({ materia, promedio: arr.reduce((a,b)=>a+b,0)/arr.length }))
+      .filter(m => m.materia !== 'General')
+      .sort((a,b)=>a.promedio - b.promedio);
+
+    const peores = materiasOrdenadas.slice(0,2);
+
+    // Tips para padres
+    const tipsParaPadres = language === 'es' ? [
+      '💡 Pregunta: "¿Qué aprendiste hoy?" en lugar de "¿Cómo te fue?"',
+      '🏠 Crea un espacio tranquilo para estudiar sin distracciones',
+      '⏰ Establece horarios fijos de estudio (20-30 min)',
+      '🎯 Celebra los pequeños logros, no solo las notas',
+      '📱 Limita el tiempo de pantallas antes de estudiar',
+      '😴 Asegura 8-10 horas de sueño para su edad',
+      '🥗 Un buen desayuno mejora la concentración',
+      '👥 Conoce a sus compañeros y profesores',
+      '📖 Lee junto a él/ella 15 min al día',
+      '💪 Refuerza el esfuerzo, no solo el resultado',
+    ] : [
+      '💡 Ask "What did you learn today?" instead of "How was school?"',
+      '🏠 Create a quiet study space without distractions',
+      '⏰ Set fixed study schedules (20-30 min)',
+      '🎯 Celebrate small achievements, not just grades',
+      '📱 Limit screen time before studying',
+      '😴 Ensure 8-10 hours of sleep for their age',
+      '🥗 A good breakfast improves concentration',
+      '👥 Get to know their classmates and teachers',
+      '📖 Read together for 15 min daily',
+      '💪 Reinforce effort, not just results',
+    ];
+
+    // Prioridades de refuerzo
+    const prioridades = materiasOrdenadas.slice(0,3).map((m, i) =>
+      language === 'es' ? `📚 Prioridad ${i+1}: ${m.materia} (${m.promedio.toFixed(1)})` : `📚 Priority ${i+1}: ${m.materia} (${m.promedio.toFixed(1)})`
+    );
+
+    const tiempo = (p:number)=> p<40?30 : p<55?20 : p<70?15 : 10;
+
+    if (peores.length >= 2) {
+      const [m1, m2] = peores;
+      const msgEs = `👤 ${nombre}\n📊 Promedio General: ${promedio.toFixed(1)}\n\n💡 ¡Con tu apoyo puede mejorar!\n\n📖 Sugerencias de refuerzo:\n• ${m1.materia} - ${tiempo(m1.promedio)} min/día\n• ${m2.materia} - ${tiempo(m2.promedio)} min/día`;
+      const msgEn = `👤 ${nombre}\n📊 Overall Average: ${promedio.toFixed(1)}\n\n💡 With your support they can improve!\n\n📖 Suggested reinforcement:\n• ${m1.materia} - ${tiempo(m1.promedio)} min/day\n• ${m2.materia} - ${tiempo(m2.promedio)} min/day`;
+      return { texto: language==='es'?msgEs:msgEn, tipo:'plan', icono: BookOpen, plan: [], prioridades, tips: tipsParaPadres };
+    }
+
+    if (peores.length === 1) {
+      const [m] = peores;
+      const msgEs = `👤 ${nombre}\n📊 Promedio General: ${promedio.toFixed(1)}\n\n💡 ¡Va muy bien!\n\n📖 Puede reforzar:\n• ${m.materia} - ${tiempo(m.promedio)} min/día`;
+      const msgEn = `👤 ${nombre}\n📊 Overall Average: ${promedio.toFixed(1)}\n\n💡 Doing great!\n\n📖 Can reinforce:\n• ${m.materia} - ${tiempo(m.promedio)} min/day`;
+      return { texto: language==='es'?msgEs:msgEn, tipo:'plan', icono: BookOpen, plan: [], prioridades, tips: tipsParaPadres };
+    }
+
+    return { 
+      texto: language==='es'
+        ? `👤 ${nombre}\n📊 Promedio General: ${promedio.toFixed(1)}\n\n✨ ¡Excelente trabajo! Sigue apoyándolo/a 🚀` 
+        : `👤 ${nombre}\n📊 Overall Average: ${promedio.toFixed(1)}\n\n✨ Great work! Keep supporting them 🚀`, 
+      tipo:'plan', 
+      icono: Sparkles, 
+      plan: [], 
+      prioridades, 
+      tips: tipsParaPadres 
     };
   };
 
@@ -692,10 +1029,163 @@ ${worstActsFormatted2}
     }
   };
 
+  // === HANDLER: Seleccionar un estudiante (para apoderados con múltiples hijos) ===
+  const handleSelectStudent = async (student: any) => {
+    setIsLoading(true);
+    setShowStudentSelector(false);
+    setSelectedStudentForAnalysis(student);
+    setClickCount(1); // Reiniciar contador
+
+    const cal = await obtenerCalificacionesDeEstudiante(student);
+    
+    if (cal.length > 0) {
+      const sug = await analizarCalificacionesConNombre(cal, student);
+      setSugerenciaActual(sug);
+      const list = [...(sug.prioridades || []), ...(sug.tips || [])];
+      setExtraTips(list);
+      setTipIndex(0);
+    } else {
+      const nombre = student.displayName || student.name || student.username;
+      setSugerenciaActual({
+        texto: language === 'es'
+          ? `📚 Aún no hay calificaciones registradas para ${nombre}.`
+          : `📚 No grades yet for ${nombre}.`,
+        tipo: 'motivacion',
+        icono: Award,
+        plan: []
+      });
+    }
+    setIsLoading(false);
+  };
+
+  // === HANDLER: Volver al selector de estudiantes (para apoderados) ===
+  const handleBackToSelector = () => {
+    setSelectedStudentForAnalysis(null);
+    setShowStudentSelector(true);
+    setClickCount(0);
+    setSugerenciaActual({
+      texto: language === 'es'
+        ? '👨‍👩‍👧‍👦 ¿De cuál estudiante quieres ver el promedio?'
+        : '👨‍👩‍👧‍👦 Which student\'s grades would you like to see?',
+      tipo: 'motivacion',
+      icono: BookOpen,
+      plan: []
+    });
+  };
+
   const handleClick = async () => {
     const nextCount = clickCount + 1;
     setClickCount(nextCount);
     setIsLoading(true);
+
+    // Determinar rol
+    const isTeacher = (user?.role === 'teacher' || user?.role === 'admin');
+    const isGuardian = user?.role === 'guardian';
+
+    // Función helper para obtener calificaciones según rol
+    const obtenerCalificaciones = async (forceRefresh: boolean) => {
+      if (isTeacher) return await obtenerCalificacionesDocente(forceRefresh);
+      if (isGuardian) return await obtenerCalificacionesApoderado(forceRefresh);
+      return await obtenerCalificacionesUsuario(forceRefresh);
+    };
+
+    // === FLUJO ESPECIAL PARA APODERADO ===
+    if (isGuardian) {
+      // Si estamos en modo selector, ignorar clics (los botones manejan la selección)
+      if (showStudentSelector) {
+        setIsLoading(false);
+        return;
+      }
+
+      // Primer clic: verificar cuántos hijos tiene
+      if (nextCount === 1 || guardianStudents.length === 0) {
+        const students = await obtenerEstudiantesApoderado();
+        setGuardianStudents(students);
+
+        if (students.length === 0) {
+          // No hay estudiantes asignados
+          setSugerenciaActual({
+            texto: language === 'es' 
+              ? '📚 No tienes estudiantes asignados. Contacta al administrador para vincular a tus hijos.'
+              : '📚 No students assigned. Contact admin to link your children.',
+            tipo: 'motivacion',
+            icono: Award,
+            plan: []
+          });
+          setIsLoading(false);
+          return;
+        }
+
+        if (students.length === 1) {
+          // Solo un hijo: mostrar directamente su análisis
+          const student = students[0];
+          setSelectedStudentForAnalysis(student);
+          const cal = await obtenerCalificacionesDeEstudiante(student);
+          
+          if (cal.length > 0) {
+            const sug = await analizarCalificacionesConNombre(cal, student);
+            setSugerenciaActual(sug);
+            const list = [...(sug.prioridades || []), ...(sug.tips || [])];
+            setExtraTips(list);
+            setTipIndex(0);
+          } else {
+            const nombre = student.displayName || student.name || student.username;
+            setSugerenciaActual({
+              texto: language === 'es'
+                ? `📚 Aún no hay calificaciones registradas para ${nombre}.`
+                : `📚 No grades yet for ${nombre}.`,
+              tipo: 'motivacion',
+              icono: Award,
+              plan: []
+            });
+          }
+          setIsLoading(false);
+          return;
+        }
+
+        // Múltiples hijos: mostrar selector
+        setShowStudentSelector(true);
+        setSugerenciaActual({
+          texto: language === 'es'
+            ? '👨‍👩‍👧‍👦 ¿De cuál estudiante quieres ver el promedio?'
+            : '👨‍👩‍👧‍👦 Which student\'s grades would you like to see?',
+          tipo: 'motivacion',
+          icono: BookOpen,
+          plan: []
+        });
+        setIsLoading(false);
+        return;
+      }
+
+      // Si ya hay un estudiante seleccionado, continuar con el ciclo normal
+      if (selectedStudentForAnalysis) {
+        // Clics subsecuentes: rotar tips/sugerencias
+        if (nextCount >= 2 && nextCount <= 7 && extraTips.length > 0) {
+          setTipIndex(i => (i + 1) % extraTips.length);
+          const tip = extraTips[tipIndex % extraTips.length];
+          setSugerenciaActual({ texto: tip, tipo: 'motivacion', icono: Sparkles, plan: [] });
+          setIsLoading(false);
+          return;
+        }
+
+        // Clic 8+: volver al análisis principal
+        if (nextCount >= 8) {
+          setClickCount(0);
+          const cal = await obtenerCalificacionesDeEstudiante(selectedStudentForAnalysis);
+          if (cal.length > 0) {
+            const sug = await analizarCalificacionesConNombre(cal, selectedStudentForAnalysis);
+            setSugerenciaActual(sug);
+          }
+          setIsLoading(false);
+          return;
+        }
+      }
+
+      setIsLoading(false);
+      return;
+    }
+
+    // === FLUJO NORMAL PARA ESTUDIANTE/PROFESOR/ADMIN ===
 
     // 1) Primer clic: mensaje principal (promedio + refuerzos)
     if (nextCount === 1) {
@@ -703,8 +1193,7 @@ ${worstActsFormatted2}
       setSugerenciaActual(null);
       setExtraTips([]);
       setTipIndex(0);
-  const isTeacher = (user?.role === 'teacher' || user?.role === 'admin');
-      const cal = isTeacher ? await obtenerCalificacionesDocente(true) : await obtenerCalificacionesUsuario(true);
+      const cal = await obtenerCalificaciones(true);
       if (cal.length) {
         const sug = isTeacher ? await analizarCalificacionesDocente(cal) : await analizarCalificaciones(cal);
         setSugerenciaActual(sug);
@@ -726,9 +1215,11 @@ ${worstActsFormatted2}
           setIsFetchingAi(false);
         }
       } else {
-        const fallback = (user?.role === 'teacher' || user?.role === 'admin')
+        const fallback = isTeacher
           ? (language==='es' ? 'Aún no hay calificaciones para tus asignaturas.' : 'No grades yet for your subjects.')
-          : (language==='es' ? 'No se encontraron calificaciones.' : 'No grades found.');
+          : isGuardian
+            ? (language==='es' ? 'Aún no hay calificaciones para tus hijos.' : 'No grades yet for your children.')
+            : (language==='es' ? 'No se encontraron calificaciones.' : 'No grades found.');
         setSugerenciaActual({ texto: fallback, tipo:'motivacion', icono: Award, plan: [] });
       }
       setIsLoading(false);
@@ -742,7 +1233,7 @@ ${worstActsFormatted2}
       if ((!msgs || msgs.length === 0) && !isFetchingAi) {
         try {
           setIsFetchingAi(true);
-          const cal = cachedGrades ?? await obtenerCalificacionesUsuario(false);
+          const cal = cachedGrades ?? await obtenerCalificaciones(false);
           const base = sugerenciaActual ?? (cal && cal.length ? await analizarCalificaciones(cal) : null);
           msgs = cal && base ? await fetchAiSuggestions(cal, base) : [];
           if (msgs && msgs.length) {
@@ -772,8 +1263,11 @@ ${worstActsFormatted2}
     // 3) Desde el 8º clic, volver al mensaje principal y reiniciar ciclo
     setClickCount(0);
     try {
-  const isTeacher = (user?.role === 'teacher' || user?.role === 'admin');
-      const cal = isTeacher ? (cachedAllGrades ?? await obtenerCalificacionesDocente(false)) : (cachedGrades ?? await obtenerCalificacionesUsuario(false));
+      const cal = isTeacher 
+        ? (cachedAllGrades ?? await obtenerCalificacionesDocente(false)) 
+        : isGuardian
+          ? (cachedGrades ?? await obtenerCalificacionesApoderado(false))
+          : (cachedGrades ?? await obtenerCalificacionesUsuario(false));
       if (cal && cal.length) {
         const sug = isTeacher ? await analizarCalificacionesDocente(cal) : await analizarCalificaciones(cal);
         setSugerenciaActual(sug);
@@ -915,7 +1409,7 @@ ${worstActsFormatted2}
                 animate={{ opacity: 1, x: 0, scale: 1 }}
                 exit={{ opacity: 0, x: 12, scale: 0.95 }}
                 transition={{ duration: 0.25 }}
-                className={`absolute ${isLoading ? '-top-6 w-40' : '-top-10 w-56'} right-full mr-4 z-50`}
+                className={`absolute ${isLoading ? '-top-6 w-40' : showStudentSelector ? '-top-10 w-64' : '-top-10 w-56'} right-full mr-4 z-50`}
               >
                 <div className="relative">
                   <div className="bg-white dark:bg-gray-800 rounded-2xl p-3 shadow-2xl border-2 border-purple-300 dark:border-purple-600">
@@ -930,9 +1424,53 @@ ${worstActsFormatted2}
                           {language === 'es' ? 'Analizando tus calificaciones...' : 'Analyzing your grades...'}
                         </span>
                       </div>
+                    ) : showStudentSelector && guardianStudents.length > 1 ? (
+                      /* === SELECTOR DE ESTUDIANTES PARA APODERADO === */
+                      <div className="flex flex-col gap-2">
+                        <div className="text-[11px] font-medium text-gray-800 dark:text-gray-100 text-center leading-relaxed">
+                          {sugerenciaActual?.texto}
+                        </div>
+                        <div className="flex flex-col gap-1.5 mt-1">
+                          {guardianStudents.map((student, idx) => {
+                            const nombre = student.displayName || student.name || student.username || `Estudiante ${idx + 1}`;
+                            const shortName = nombre.split(' ').slice(0, 2).join(' '); // Solo primeros 2 nombres
+                            return (
+                              <motion.button
+                                key={student.id || idx}
+                                whileHover={{ scale: 1.02 }}
+                                whileTap={{ scale: 0.98 }}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleSelectStudent(student);
+                                }}
+                                className="w-full px-3 py-2 text-[11px] font-semibold rounded-lg bg-gradient-to-r from-indigo-500 to-purple-500 text-white shadow-md hover:from-indigo-600 hover:to-purple-600 transition-all"
+                              >
+                                👤 {shortName}
+                              </motion.button>
+                            );
+                          })}
+                        </div>
+                      </div>
                     ) : (
-                      <div className="text-[11px] font-medium text-gray-800 dark:text-gray-100 text-left leading-relaxed whitespace-pre-line">
-                        {sugerenciaActual?.texto}
+                      /* === MENSAJE NORMAL === */
+                      <div className="flex flex-col gap-2">
+                        <div className="text-[11px] font-medium text-gray-800 dark:text-gray-100 text-left leading-relaxed whitespace-pre-line">
+                          {sugerenciaActual?.texto}
+                        </div>
+                        {/* Botón para volver al selector si hay múltiples hijos */}
+                        {user?.role === 'guardian' && guardianStudents.length > 1 && selectedStudentForAnalysis && (
+                          <motion.button
+                            whileHover={{ scale: 1.02 }}
+                            whileTap={{ scale: 0.98 }}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleBackToSelector();
+                            }}
+                            className="w-full mt-1 px-2 py-1.5 text-[10px] font-medium rounded-lg bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-200 hover:bg-gray-200 dark:hover:bg-gray-600 transition-all"
+                          >
+                            ← {language === 'es' ? 'Ver otro estudiante' : 'View another student'}
+                          </motion.button>
+                        )}
                       </div>
                     )}
                   </div>

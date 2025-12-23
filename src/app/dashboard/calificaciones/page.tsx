@@ -532,15 +532,42 @@ export default function GradesPage() {
 
       // Caso 1: Estudiante logueado (ver su propia asistencia)
       if (user?.role === 'student') {
+        console.log('🎓 [ASISTENCIA ESTUDIANTE] Cargando asistencia para estudiante logueado');
+        console.log('   user.id:', user.id);
+        console.log('   user.username:', user.username);
         try {
           const records = await getAttendanceByYear(selectedYear);
+          console.log('📊 [ASISTENCIA ESTUDIANTE] Total registros:', records?.length || 0);
+          
           if (records && records.length > 0) {
-            // Filtrar por estudiante
-            const myRecords = records.filter((r: any) => 
-              r.studentId === user.id || 
-              r.studentId === user.username || 
-              r.studentUsername === user.username
-            );
+            // Normalizar identificadores del estudiante para comparación robusta
+            const norm = (v: any) => String(v ?? '').toLowerCase().trim();
+            const normRut = (v: any) => norm(v).replace(/\./g, '').replace(/-/g, '');
+
+            const studentIdStr = norm(user.id);
+            const studentUsernameStr = norm(user.username);
+            const studentRutStr = norm((user as any)?.rut);
+            const studentRutCleanStr = normRut((user as any)?.rut);
+            const studentNameStr = norm((user as any)?.displayName || (user as any)?.name);
+            
+            // Filtrar por estudiante con comparación robusta
+            const myRecords = records.filter((r: any) => {
+              const recStudentId = norm(r.studentId);
+              const recStudentUsername = norm(r.studentUsername || r.username);
+              const recStudentRut = norm(r.studentRut || r.rut || r.RUT);
+              const recStudentRutClean = normRut(r.studentRut || r.rut || r.RUT);
+              const recStudentName = norm(r.studentName || r.estudiante || r.nombre);
+
+              return (
+                (studentIdStr && recStudentId === studentIdStr) ||
+                (studentUsernameStr && (recStudentId === studentUsernameStr || recStudentUsername === studentUsernameStr)) ||
+                (studentRutStr && (recStudentId === studentRutStr || recStudentRut === studentRutStr)) ||
+                (studentRutCleanStr && (recStudentId === studentRutCleanStr || recStudentRutClean === studentRutCleanStr)) ||
+                (studentNameStr && recStudentName === studentNameStr)
+              );
+            });
+            
+            console.log('📋 [ASISTENCIA ESTUDIANTE] Registros filtrados:', myRecords.length);
             
             let present = 0;
             let late = 0;
@@ -548,14 +575,19 @@ export default function GradesPage() {
             let excused = 0;
             
             myRecords.forEach((r: any) => {
-              if (r.status === 'present') present++;
-              else if (r.status === 'late') late++;
-              else if (r.status === 'absent') absent++;
-              else if (r.status === 'excused') excused++;
+              const rawSt = r.status || r.estado || r.Status || r.Estado;
+              const st = String(rawSt || '').replace(/['"]/g, '').replace(/\.$/, '').trim().toLowerCase();
+              
+              if (['present', 'presente', 'asistente', 'p', '1', 'true'].includes(st)) present++;
+              else if (['late', 'tarde', 'atrasado', 'atraso', 'l', 't'].includes(st)) late++;
+              else if (['absent', 'ausente', 'falta', 'a', '0', 'false'].includes(st)) absent++;
+              else if (['excused', 'justificado', 'licencia', 'e', 'j'].includes(st)) excused++;
             });
             
             const total = present + late + absent + excused;
             const positive = present + late;
+            
+            console.log('📈 [ASISTENCIA ESTUDIANTE] Stats:', { present, late, absent, excused, total, avg: total > 0 ? Math.round((positive / total) * 100) : 0 });
             
             if (total > 0) {
               setStudentAttendanceStats({
@@ -566,6 +598,7 @@ export default function GradesPage() {
                 excused
               });
             } else {
+              console.warn('⚠️ [ASISTENCIA ESTUDIANTE] No se encontraron registros para este estudiante');
               setStudentAttendanceStats(null);
             }
           } else {
@@ -573,9 +606,96 @@ export default function GradesPage() {
           }
         } catch (e) {
           console.error('Error loading attendance for grades page (student):', e);
+          setStudentAttendanceStats(null);
         }
-      } 
-      // Caso 2: Admin o Profesor (ver asistencia según filtros)
+      }
+      // Caso 2: Apoderado (ver asistencia del estudiante seleccionado)
+      else if (user?.role === 'guardian' && selectedGuardianStudent) {
+        console.log('👨‍👩‍👧 [ASISTENCIA APODERADO] Cargando asistencia para estudiante seleccionado');
+        console.log('   selectedGuardianStudent:', selectedGuardianStudent);
+        
+        // Buscar el objeto completo del estudiante seleccionado
+        const selectedStudent = guardianStudents.find(s => String(s.id) === String(selectedGuardianStudent));
+        console.log('   Estudiante encontrado:', selectedStudent?.displayName || selectedStudent?.name);
+        console.log('   username del estudiante:', selectedStudent?.username);
+        
+        try {
+          const records = await getAttendanceByYear(selectedYear);
+          console.log('📊 [ASISTENCIA APODERADO] Total registros:', records?.length || 0);
+          
+          if (records && records.length > 0) {
+            // Normalizar identificadores del estudiante para comparación robusta
+            const norm = (v: any) => String(v ?? '').toLowerCase().trim();
+            const normRut = (v: any) => norm(v).replace(/\./g, '').replace(/-/g, '');
+
+            const studentIdStr = norm(selectedGuardianStudent);
+            const studentUsernameStr = norm(selectedStudent?.username);
+            const studentRutStr = norm(selectedStudent?.rut);
+            const studentRutCleanStr = normRut(selectedStudent?.rut);
+            const studentNameStr = norm(selectedStudent?.displayName || selectedStudent?.name);
+            
+            console.log('🔍 [ASISTENCIA APODERADO] Buscando con:', { studentIdStr, studentUsernameStr, studentNameStr });
+            
+            // Filtrar por el estudiante seleccionado con comparación robusta
+            const myRecords = records.filter((r: any) => {
+              const recStudentId = norm(r.studentId);
+              const recStudentUsername = norm(r.studentUsername || r.username);
+              const recStudentRut = norm(r.studentRut || r.rut || r.RUT);
+              const recStudentRutClean = normRut(r.studentRut || r.rut || r.RUT);
+              const recStudentName = norm(r.studentName || r.estudiante || r.nombre);
+
+              return (
+                (studentIdStr && recStudentId === studentIdStr) ||
+                (studentUsernameStr && (recStudentId === studentUsernameStr || recStudentUsername === studentUsernameStr)) ||
+                (studentRutStr && (recStudentId === studentRutStr || recStudentRut === studentRutStr)) ||
+                (studentRutCleanStr && (recStudentId === studentRutCleanStr || recStudentRutClean === studentRutCleanStr)) ||
+                (studentNameStr && recStudentName === studentNameStr)
+              );
+            });
+            
+            console.log('📋 [ASISTENCIA APODERADO] Registros filtrados para estudiante:', myRecords.length);
+            
+            let present = 0;
+            let late = 0;
+            let absent = 0;
+            let excused = 0;
+            
+            myRecords.forEach((r: any) => {
+              const rawSt = r.status || r.estado || r.Status || r.Estado;
+              const st = String(rawSt || '').replace(/['"]/g, '').replace(/\.$/, '').trim().toLowerCase();
+              
+              if (['present', 'presente', 'asistente', 'p', '1', 'true'].includes(st)) present++;
+              else if (['late', 'tarde', 'atrasado', 'atraso', 'l', 't'].includes(st)) late++;
+              else if (['absent', 'ausente', 'falta', 'a', '0', 'false'].includes(st)) absent++;
+              else if (['excused', 'justificado', 'licencia', 'e', 'j'].includes(st)) excused++;
+            });
+            
+            const total = present + late + absent + excused;
+            const positive = present + late;
+            
+            console.log('📈 [ASISTENCIA APODERADO] Stats:', { present, late, absent, excused, total, avg: total > 0 ? Math.round((positive / total) * 100) : 0 });
+            
+            if (total > 0) {
+              setStudentAttendanceStats({
+                avg: Math.round((positive / total) * 100),
+                present,
+                late,
+                absent,
+                excused
+              });
+            } else {
+              console.warn('⚠️ [ASISTENCIA APODERADO] No se encontraron registros para el estudiante seleccionado');
+              setStudentAttendanceStats(null);
+            }
+          } else {
+            setStudentAttendanceStats(null);
+          }
+        } catch (e) {
+          console.error('Error loading attendance for grades page (guardian):', e);
+          setStudentAttendanceStats(null);
+        }
+      }
+      // Caso 3: Admin o Profesor (ver asistencia según filtros)
       else if (user?.role === 'admin' || user?.role === 'teacher') {
         console.log('🔄 [loadAttendance] studentFilter:', studentFilter, 'cascadeSectionId:', cascadeSectionId);
         
@@ -965,7 +1085,7 @@ export default function GradesPage() {
     };
     
     loadAttendance();
-  }, [user, selectedYear, getAttendanceByYear, studentFilter, cascadeSectionId, cascadeCourseId, comboSectionId, semester, studentAssignments, sections, courses, users]);
+  }, [user, selectedYear, getAttendanceByYear, studentFilter, cascadeSectionId, cascadeCourseId, comboSectionId, semester, studentAssignments, sections, courses, users, selectedGuardianStudent, guardianStudents]);
   // Guards para evitar ráfagas y recargas concurrentes entre eventos
   const reloadingGradesRef = useRef(false);
   const reloadingActsRef = useRef(false);
@@ -7854,8 +7974,9 @@ export default function GradesPage() {
         {/* Tarjeta flotante con Promedio General */}
         {(() => {
           // 🎯 CONDICIÓN: Solo mostrar cuando hay filtros suficientes seleccionados
-          // Reglas: Debe tener Semestre + Nivel + Curso (mínimo)
-          // Combinaciones válidas:
+          // Reglas para Admin/Teacher: Debe tener Semestre + Nivel + Curso (mínimo)
+          // Reglas para Student/Guardian: Siempre mostrar si hay calificaciones
+          // Combinaciones válidas para Admin/Teacher:
           //   - Semestre + Nivel + Curso
           //   - Semestre + Nivel + Curso + Sección
           //   - Semestre + Nivel + Curso + Sección + Asignatura
@@ -7865,8 +7986,11 @@ export default function GradesPage() {
           const hasLevelFilter = levelFilter !== 'all';
           const hasCourseFilter = Boolean(cascadeCourseId) || (comboSectionId !== 'all');
           
-          // Si no cumple los filtros mínimos, no mostrar la tarjeta
-          if (!hasSemesterFilter || !hasLevelFilter || !hasCourseFilter) {
+          // Para estudiantes y apoderados: siempre permitir mostrar las tarjetas
+          const isStudentOrGuardian = user?.role === 'student' || user?.role === 'guardian';
+          
+          // Si es Admin/Teacher y no cumple los filtros mínimos, no mostrar la tarjeta
+          if (!isStudentOrGuardian && (!hasSemesterFilter || !hasLevelFilter || !hasCourseFilter)) {
             return null;
           }
 
@@ -8155,15 +8279,19 @@ export default function GradesPage() {
                 </CardContent>
               </Card>
 
-              {/* 🆕 Tarjeta de Promedio Asistencia (Estudiantes, Admin y Profesores) */}
+              {/* 🆕 Tarjeta de Promedio Asistencia (Estudiantes, Apoderados, Admin y Profesores) */}
               {(() => {
                 const isStudent = user?.role === 'student';
+                const isGuardian = user?.role === 'guardian';
                 const isStaff = user?.role === 'admin' || user?.role === 'teacher';
                 const hasSectionContext = Boolean(cascadeSectionId || (comboSectionId && comboSectionId !== 'all'));
                 const hasSemester = semester !== 'all';
 
-                // Estudiante: solo mostrar si hay stats calculados
-                if (isStudent) return studentAttendanceStats !== null;
+                // Estudiante: mostrar siempre (mientras carga puede aparecer como '—')
+                if (isStudent) return true;
+
+                // Apoderado: mostrar si hay estudiante seleccionado (mientras carga puede aparecer como '—')
+                if (isGuardian && selectedGuardianStudent) return true;
 
                 // Admin / Profesor: mostrar siempre que haya curso/sección seleccionados (semestre opcional)
                 if (isStaff && hasSectionContext) return true;
