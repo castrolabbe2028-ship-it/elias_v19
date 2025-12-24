@@ -326,15 +326,44 @@ export default function LibrosPage() {
         }
       }
       
-      // MÉTODO 4: Buscar asignación en studentAssignments
+      // MÉTODO 4: Buscar asignación en studentAssignments (comparación flexible)
       if (names.size === 0) {
-        const assignment = studentAssignments.find((a: any) => a.studentId === fullUserData.id);
+        console.log('📚 [Libros] Buscando en studentAssignments para ID:', fullUserData.id, 'username:', fullUserData.username);
+        
+        const assignment = studentAssignments.find((a: any) => {
+          const matchById = String(a.studentId) === String(fullUserData.id);
+          const matchByUsername = a.studentUsername === fullUserData.username;
+          // También intentar match parcial del ID
+          const matchByPartialId = a.studentId && fullUserData.id && 
+            (String(a.studentId).includes(String(fullUserData.id)) || 
+             String(fullUserData.id).includes(String(a.studentId)));
+          
+          if (matchById || matchByUsername || matchByPartialId) {
+            console.log('📚 [Libros] ✓ Assignment match encontrado:', a);
+            return true;
+          }
+          return false;
+        });
+        
         if (assignment) {
           const course = coursesData.find((c: any) => c.id === assignment.courseId);
+          const section = sections.find((s: any) => s.id === assignment.sectionId);
+          
           if (course?.name) {
             console.log('📚 [Libros] ✅ Curso encontrado por assignment:', course.name);
             names.add(normalizeCourseNameForBooks(course.name));
+          } else if (section) {
+            // Si no hay courseId directo, derivar desde la sección
+            const courseFromSection = coursesData.find((c: any) => c.id === section.courseId);
+            if (courseFromSection?.name) {
+              console.log('📚 [Libros] ✅ Curso encontrado por assignment.sectionId:', courseFromSection.name);
+              names.add(normalizeCourseNameForBooks(courseFromSection.name));
+            }
           }
+        } else {
+          // Log de muestra para debugging
+          const sampleAssignments = studentAssignments.slice(0, 3);
+          console.log('📚 [Libros] No se encontró assignment. Muestra de assignments:', sampleAssignments);
         }
       }
       
