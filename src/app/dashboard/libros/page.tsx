@@ -247,7 +247,7 @@ export default function LibrosPage() {
   };
 
   // Group books by course - filtered by user permissions and teacher assignments
-  // Helper: cursos accesibles para estudiante (usa asignaciones y activeCourses)
+  // Helper: cursos accesibles para estudiante (replica lógica de perfil)
   const getStudentAccessibleCourses = () => {
     if (user.role !== 'student' && user.role !== 'estudiante') {
       return getAccessibleCourses() || [];
@@ -256,105 +256,103 @@ export default function LibrosPage() {
     try {
       console.log('📚 [Libros] Buscando cursos para estudiante:', { id: user.id, username: user.username, role: user.role });
       
-      const assignments = JSON.parse(localStorage.getItem('smart-student-student-assignments') || '[]');
-      const coursesData = JSON.parse(localStorage.getItem('smart-student-courses') || '[]');
-      const sections = JSON.parse(localStorage.getItem('smart-student-sections') || '[]');
+      // Helper: obtener datasets considerando año actual (clave con sufijo -YYYY si existe)
+      const getYearAwareData = (baseKey: string) => {
+        const year = new Date().getFullYear();
+        const withYear = localStorage.getItem(`${baseKey}-${year}`);
+        const raw = withYear || localStorage.getItem(baseKey);
+        try { return raw ? JSON.parse(raw) : []; } catch { return []; }
+      };
+      
+      const coursesData = getYearAwareData('smart-student-courses');
+      const sections = getYearAwareData('smart-student-sections');
+      const studentAssignments = getYearAwareData('smart-student-student-assignments');
       const usersData = JSON.parse(localStorage.getItem('smart-student-users') || '[]');
       
       console.log('📚 [Libros] Datos disponibles:', { 
-        assignments: assignments.length, 
         courses: coursesData.length, 
-        sections: sections.length 
+        sections: sections.length,
+        assignments: studentAssignments.length
       });
       
-      // Buscar el usuario completo para obtener más información
+      // Buscar el usuario completo para obtener courseId y sectionId
       const fullUserData = usersData.find((u: any) => 
         u.username?.toLowerCase() === user.username?.toLowerCase() ||
         String(u.id) === String(user.id)
       );
       
-      console.log('📚 [Libros] Usuario completo encontrado:', fullUserData ? {
+      console.log('📚 [Libros] Usuario completo:', fullUserData ? {
         id: fullUserData.id,
         username: fullUserData.username,
-        activeCourses: fullUserData.activeCourses,
         courseId: fullUserData.courseId,
-        sectionId: fullUserData.sectionId
+        sectionId: fullUserData.sectionId,
+        activeCourses: fullUserData.activeCourses
       } : 'NO ENCONTRADO');
+      
+      if (!fullUserData) {
+        console.warn('📚 [Libros] Usuario no encontrado en smart-student-users');
+        return [];
+      }
       
       const names = new Set<string>();
       
-      // Método 1: Buscar en student-assignments
-      const my = Array.isArray(assignments) ? assignments.filter((a: any) => {
-        const matchId = String(a.studentId) === String(user.id) || String(a.studentId) === String(fullUserData?.id);
-        const matchUsername = a.studentUsername === user.username || a.studentUsername === fullUserData?.username;
-        return matchId || matchUsername;
-      }) : [];
-      
-      console.log('📚 [Libros] Asignaciones encontradas:', my);
-      
-      for (const a of my) {
-        let courseName: string | null = null;
-        if (a.courseId) {
-          const c = coursesData.find((c: any) => String(c.id) === String(a.courseId));
-          courseName = c?.name || null;
-          console.log(`📚 [Libros] Curso por courseId ${a.courseId}:`, courseName);
-        } 
-        if (!courseName && a.sectionId) {
-          const s = sections.find((s: any) => String(s.id) === String(a.sectionId));
-          if (s) {
-            const c = coursesData.find((c: any) => String(c.id) === String(s.courseId));
-            courseName = c?.name || null;
-            console.log(`📚 [Libros] Curso por sectionId ${a.sectionId}:`, courseName);
-          }
-        }
-        if (courseName) {
-          names.add(normalizeCourseNameForBooks(courseName));
+      // MÉTODO 1: courseId y sectionId directamente en el usuario (Gestión de Usuarios)
+      if (fullUserData.courseId && fullUserData.sectionId) {
+        const course = coursesData.find((c: any) => c.id === fullUserData.courseId);
+        if (course?.name) {
+          console.log('📚 [Libros] ✅ Curso encontrado por courseId directo:', course.name);
+          names.add(normalizeCourseNameForBooks(course.name));
         }
       }
       
-      // Método 2: Buscar courseId/sectionId directamente en el usuario
-      if (names.size === 0 && fullUserData) {
-        if (fullUserData.sectionId) {
-          const section = sections.find((s: any) => String(s.id) === String(fullUserData.sectionId));
-          if (section) {
-            const course = coursesData.find((c: any) => String(c.id) === String(section.courseId));
-            if (course?.name) {
-              console.log('📚 [Libros] Curso desde usuario.sectionId:', course.name);
-              names.add(normalizeCourseNameForBooks(course.name));
-            }
-          }
+      // MÉTODO 2: Solo courseId (sin sectionId)
+      if (names.size === 0 && fullUserData.courseId) {
+        const course = coursesData.find((c: any) => c.id === fullUserData.courseId);
+        if (course?.name) {
+          console.log('📚 [Libros] ✅ Curso encontrado por courseId:', course.name);
+          names.add(normalizeCourseNameForBooks(course.name));
         }
-        if (fullUserData.courseId && names.size === 0) {
-          const course = coursesData.find((c: any) => String(c.id) === String(fullUserData.courseId));
+      }
+      
+      // MÉTODO 3: Solo sectionId (derivar courseId desde la sección)
+      if (names.size === 0 && fullUserData.sectionId) {
+        const section = sections.find((s: any) => s.id === fullUserData.sectionId);
+        if (section) {
+          const course = coursesData.find((c: any) => c.id === section.courseId);
           if (course?.name) {
-            console.log('📚 [Libros] Curso desde usuario.courseId:', course.name);
+            console.log('📚 [Libros] ✅ Curso encontrado por sectionId:', course.name);
             names.add(normalizeCourseNameForBooks(course.name));
           }
         }
       }
       
-      // Método 3: Usar activeCourses del usuario
-      if (names.size === 0 && fullUserData?.activeCourses && Array.isArray(fullUserData.activeCourses)) {
-        console.log('📚 [Libros] Usando activeCourses:', fullUserData.activeCourses);
-        for (const courseEntry of fullUserData.activeCourses) {
-          let courseName: string | null = null;
-          const courseId = typeof courseEntry === 'object' ? (courseEntry.id || courseEntry.courseId) : courseEntry;
-          
-          // Intentar resolver como ID de curso
-          const course = coursesData.find((c: any) => String(c.id) === String(courseId) || c.name === courseId);
+      // MÉTODO 4: Buscar asignación en studentAssignments
+      if (names.size === 0) {
+        const assignment = studentAssignments.find((a: any) => a.studentId === fullUserData.id);
+        if (assignment) {
+          const course = coursesData.find((c: any) => c.id === assignment.courseId);
           if (course?.name) {
-            courseName = course.name;
-          } else if (typeof courseId === 'string' && (courseId.includes('Básico') || courseId.includes('Medio'))) {
-            courseName = courseId;
+            console.log('📚 [Libros] ✅ Curso encontrado por assignment:', course.name);
+            names.add(normalizeCourseNameForBooks(course.name));
           }
-          
-          if (courseName) {
+        }
+      }
+      
+      // MÉTODO 5: Parsear activeCourses estilo "1ro Básico - Sección A"
+      if (names.size === 0 && Array.isArray(fullUserData.activeCourses) && fullUserData.activeCourses.length > 0) {
+        for (const entry of fullUserData.activeCourses) {
+          let raw = typeof entry === 'string' ? entry : (entry?.name || entry?.id || '');
+          if (raw) {
+            // Extraer nombre de curso (antes de " - Sección")
+            const match = raw.match(/^(.+?)\s*-\s*Sección/i);
+            const courseName = match ? match[1].trim() : raw;
+            console.log('📚 [Libros] ✅ Curso parseado de activeCourses:', courseName);
             names.add(normalizeCourseNameForBooks(courseName));
           }
         }
       }
       
-      // Método 4: Fallback a getAccessibleCourses del contexto
+      // MÉTODO 6: Fallback a getAccessibleCourses del contexto
       if (names.size === 0) {
         const base = getAccessibleCourses() || [];
         console.log('📚 [Libros] Fallback a getAccessibleCourses:', base);
