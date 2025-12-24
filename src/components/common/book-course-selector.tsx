@@ -403,6 +403,63 @@ export function BookCourseSelector({
   const isUserAdmin = isAdmin();
   let filteredCourses: string[] = [];
 
+  // Nueva función: obtener cursos accesibles para el apoderado a partir de los estudiantes asignados
+  const getGuardianAccessibleCourses = (): string[] => {
+    if (user?.role !== 'guardian') return [];
+    try {
+      const usersData = JSON.parse(localStorage.getItem('smart-student-users') || '[]');
+      const fullUserData = usersData.find((u: any) => String(u.id) === String(user.id) || String(u.username) === String(user.username));
+      const studentIdsFromUser = fullUserData?.studentIds || [];
+
+      // 1) si tenemos studentIds directos, obtener estudiantes
+      let studentRecords: any[] = [];
+      if (Array.isArray(studentIdsFromUser) && studentIdsFromUser.length > 0) {
+        studentRecords = usersData.filter((u: any) => studentIdsFromUser.some((sid: any) => String(sid) === String(u.id) || String(sid) === String(u.username) || String(sid) === String(u.rut)));
+      }
+
+      // 2) fallback a relaciones guardian-student
+      if (studentRecords.length === 0) {
+        const relations = JSON.parse(localStorage.getItem('smart-student-guardian-student-relations') || '[]');
+        const rels = relations.filter((r: any) => String(r.guardianId) === String(user.id) || String(r.guardianUsername) === String(user.username));
+        const relStudentIds = rels.map((r: any) => r.studentId);
+        if (relStudentIds.length > 0) {
+          studentRecords = usersData.filter((u: any) => relStudentIds.some((sid: any) => String(sid) === String(u.id) || String(sid) === String(u.username) || String(sid) === String(u.rut)));
+        }
+      }
+
+      const names = new Set<string>();
+
+      for (const s of studentRecords) {
+        if (s.course) names.add(normalizeCourseName(s.course));
+        if (Array.isArray(s.enrolledCourses)) {
+          s.enrolledCourses.forEach((e: any) => { if (e) names.add(normalizeCourseName(typeof e === 'string' ? e : (e?.name || ''))); });
+        }
+        if (Array.isArray(s.activeCourseNames)) {
+          s.activeCourseNames.forEach((e: any) => { if (e) names.add(normalizeCourseName(typeof e === 'string' ? e : (e?.name || ''))); });
+        }
+
+        // Fallback: buscar asignación directa en studentAssignments
+        const assignments = JSON.parse(localStorage.getItem('smart-student-student-assignments') || '[]');
+        const a = assignments.find((as: any) => String(as.studentId) === String(s.id) || String(as.studentUsername) === String(s.username));
+        if (a) {
+          const coursesLS = JSON.parse(localStorage.getItem('smart-student-courses') || '[]');
+          const sectionsLS = JSON.parse(localStorage.getItem('smart-student-sections') || '[]');
+          if (a.courseId) {
+            const c = coursesLS.find((c: any) => String(c.id) === String(a.courseId)); if (c?.name) names.add(normalizeCourseName(c.name));
+          } else if (a.sectionId) {
+            const sec = sectionsLS.find((ss: any) => String(ss.id) === String(a.sectionId));
+            if (sec) { const c = coursesLS.find((c: any) => String(c.id) === String(sec.courseId)); if (c?.name) names.add(normalizeCourseName(c.name)); }
+          }
+        }
+      }
+
+      return Array.from(names);
+    } catch (err) {
+      console.warn('[BookSelector] Error al obtener cursos del apoderado:', err);
+      return [];
+    }
+  };
+
   if (user?.role === 'teacher') {
     // Para profesores, filtrar por cursos asignados
     const teacherAssignments = getTeacherAssignedSubjects();
@@ -416,6 +473,12 @@ export function BookCourseSelector({
         Array.isArray(userAccessibleCourses) && userAccessibleCourses.includes(course)
       );
     }
+  } else if (user?.role === 'guardian') {
+    // Para apoderados, derivar cursos desde los estudiantes asignados
+    const guardianCourses = getGuardianAccessibleCourses();
+    console.log('📚 [BookSelector] Cursos detectados para apoderado:', guardianCourses);
+    const accessible = isUserAdmin ? Object.keys(courses || {}) : guardianCourses;
+    filteredCourses = Object.keys(courses || {}).filter(course => Array.isArray(accessible) && accessible.includes(course));
   } else {
     // Admin: todos; Estudiante: usar activeCourses o derivar desde asignaciones si vacío
     const userAccessibleCourses = user?.role === 'student' ? getStudentAccessibleCourses() : getAccessibleCourses();
@@ -465,17 +528,49 @@ export function BookCourseSelector({
     }
   }, [showSubjectSelector, user?.role, selectedCourse, selectedSubject, onSubjectChange, language]);
 
-  // AUTOSELECT: si el usuario es estudiante y no hay curso seleccionado, seleccionar el curso detectado por prioridad
+  // AUTOSELECT: si el usuario es estudiante o apoderado y no hay curso seleccionado, seleccionar el curso detectado por prioridad
   useEffect(() => {
-    if (user?.role !== 'student') return;
+    if (!user) return;
     if (selectedCourse) return; // no sobrescribir selección manual
 
     if (filteredCourses && filteredCourses.length > 0) {
-      // Priorizar match con user.course / enrolledCourses / activeCourseNames si existe
-      const userCourseNormalized = user?.course ? normalizeCourseName(user.course) : null;
-      const candidate = (userCourseNormalized && filteredCourses.find(c => normalizeCourseName(c) === userCourseNormalized)) || filteredCourses[0];
+      // Priorizar match con user.course / enrolledCourses / activeCourseNames si existe (estudiante)
+      let candidate: string | null = null;
+
+      if (user.role === 'student') {
+        const userCourseNormalized = user?.course ? normalizeCourseName(user.course) : null;
+        candidate = (userCourseNormalized && filteredCourses.find(c => normalizeCourseName(c) === userCourseNormalized)) || filteredCourses[0] || null;
+      }
+
+      if (user.role === 'guardian') {
+        // priorizar curso del primer estudiante asignado
+        try {
+          const usersData = JSON.parse(localStorage.getItem('smart-student-users') || '[]');
+          const fullUserData = usersData.find((u: any) => String(u.id) === String(user.id) || String(u.username) === String(user.username));
+          let firstStudentId = null;
+          if (fullUserData?.studentIds && fullUserData.studentIds.length > 0) firstStudentId = fullUserData.studentIds[0];
+          if (!firstStudentId) {
+            const relations = JSON.parse(localStorage.getItem('smart-student-guardian-student-relations') || '[]');
+            const rels = relations.filter((r: any) => String(r.guardianId) === String(user.id) || String(r.guardianUsername) === String(user.username));
+            if (rels.length > 0) firstStudentId = rels[0].studentId;
+          }
+          if (firstStudentId) {
+            const student = usersData.find((s: any) => String(s.id) === String(firstStudentId) || String(s.username) === String(firstStudentId) || String(s.rut) === String(firstStudentId));
+            if (student) {
+              const candidateName = normalizeCourseName(student.course || (Array.isArray(student.enrolledCourses) && student.enrolledCourses[0]) || (Array.isArray(student.activeCourseNames) && student.activeCourseNames[0]) || '');
+              if (candidateName) candidate = filteredCourses.find(c => normalizeCourseName(c) === candidateName) || null;
+            }
+          }
+        } catch (e) {
+          console.warn('[BookSelector] Error al auto-seleccionar curso para apoderado:', e);
+        }
+
+        // Si no encontramos candidato específico, usar el primero disponible
+        if (!candidate) candidate = filteredCourses[0] || null;
+      }
+
       if (candidate) {
-        console.log('📚 [BookSelector] Auto-seleccionando curso para estudiante:', candidate);
+        console.log('📚 [BookSelector] Auto-seleccionando curso para usuario:', user.role, candidate);
         onCourseChange(candidate);
       }
     }
