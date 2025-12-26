@@ -1,14 +1,14 @@
 
 "use client";
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { useLanguage } from '@/contexts/language-context';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
-import { Newspaper, Download, Network, FileQuestion, ClipboardList } from 'lucide-react';
+import { Newspaper, Download, Network, FileQuestion, ClipboardList, BookOpen, Loader2 } from 'lucide-react';
 import { BookCourseSelector } from '@/components/common/book-course-selector';
 import { useToast } from "@/hooks/use-toast";
 import { useAIProgress } from "@/hooks/use-ai-progress";
@@ -17,6 +17,8 @@ import { Progress } from '@/components/ui/progress';
 import { cn } from '@/lib/utils';
 import { contentDB } from '@/lib/sql-content';
 import { useAuth } from '@/contexts/auth-context';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { analyzeMathPdfTopics } from '@/ai/flows/analyze-math-pdf-topics';
 
 // Types for API response
 interface GenerateSummaryResponse {
@@ -96,6 +98,71 @@ export default function ResumenPage() {
   const [summaryResult, setSummaryResult] = useState<{ summary: string; keyPoints?: string[] } | null>(null);
   const [keyPointsRequested, setKeyPointsRequested] = useState(false);
   const [currentTopicForDisplay, setCurrentTopicForDisplay] = useState('');
+  
+  // Estados para análisis de PDF de matemáticas
+  const [mathTopics, setMathTopics] = useState<string[]>([]);
+  const [selectedMathTopic, setSelectedMathTopic] = useState('');
+  const [isAnalyzingPdf, setIsAnalyzingPdf] = useState(false);
+  const [isMathSelection, setIsMathSelection] = useState(false);
+
+  // Detectar si es matemáticas y analizar el PDF automáticamente
+  useEffect(() => {
+    const checkMathSubject = async () => {
+      const subjectLower = selectedSubject.toLowerCase();
+      const isMath = subjectLower.includes('matemat') || 
+                     subjectLower.includes('math') || 
+                     subjectLower.includes('álgebra') || 
+                     subjectLower.includes('algebra') ||
+                     subjectLower.includes('geometr') ||
+                     subjectLower.includes('cálculo') ||
+                     subjectLower.includes('calculo') ||
+                     subjectLower.includes('trigonometr') ||
+                     subjectLower.includes('aritmética') ||
+                     subjectLower.includes('aritmetica');
+      
+      setIsMathSelection(isMath);
+      
+      if (isMath && selectedCourse) {
+        setIsAnalyzingPdf(true);
+        setMathTopics([]);
+        setSelectedMathTopic('');
+        
+        try {
+          // Analizar el PDF de matemáticas de la biblioteca
+          const result = await analyzeMathPdfTopics({
+            courseLevel: selectedCourse,
+            language: currentUiLanguage
+          });
+          
+          if (result.topics && result.topics.length > 0) {
+            setMathTopics(result.topics);
+            toast({
+              title: translate('mathTopicsDetected') || '📚 Temas detectados',
+              description: `${result.topics.length} ${translate('mathTopicsFound') || 'temas de matemáticas encontrados en el PDF'}`,
+              variant: 'default'
+            });
+          }
+        } catch (error) {
+          console.error('Error analyzing math PDF:', error);
+        } finally {
+          setIsAnalyzingPdf(false);
+        }
+      } else {
+        setMathTopics([]);
+        setSelectedMathTopic('');
+      }
+    };
+    
+    checkMathSubject();
+  }, [selectedSubject, selectedCourse, currentUiLanguage]);
+
+  // Cuando se selecciona un tema de matemáticas, actualizar el campo de tema
+  const handleMathTopicSelect = (topicValue: string) => {
+    setSelectedMathTopic(topicValue);
+    if (topicValue) {
+      setTopic(topicValue);
+    }
+  };
 
   const handleGenerateSummary = async () => {
     if (!selectedSubject) {
@@ -321,6 +388,49 @@ export default function ResumenPage() {
             }}
             onSubjectChange={setSelectedSubject}
           />
+          
+          {/* Análisis automático de PDF para Matemáticas */}
+          {isMathSelection && (
+            <div className="space-y-3 p-4 bg-gradient-to-r from-blue-500/10 to-purple-500/10 rounded-lg border border-blue-500/20">
+              <div className="flex items-center gap-2 text-sm font-medium text-blue-400">
+                <BookOpen className="w-4 h-4" />
+                <span>{translate('summaryMathPdfAnalysis')}</span>
+              </div>
+              
+              {isAnalyzingPdf ? (
+                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  <span>{translate('summaryAnalyzingMathPdf')}</span>
+                </div>
+              ) : mathTopics.length > 0 ? (
+                <div className="space-y-2">
+                  <Label className="text-left block text-sm">
+                    {translate('summarySelectMathTopic')}
+                  </Label>
+                  <Select value={selectedMathTopic} onValueChange={handleMathTopicSelect}>
+                    <SelectTrigger className="w-full">
+                      <SelectValue placeholder={translate('summaryChooseMathTopic')} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {mathTopics.map((mathTopic, index) => (
+                        <SelectItem key={index} value={mathTopic}>
+                          📐 {mathTopic}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground">
+                    {translate('summaryMathTopicHint')}
+                  </p>
+                </div>
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  {translate('summaryNoMathTopicsFound')}
+                </p>
+              )}
+            </div>
+          )}
+          
           <div className="space-y-2">
             <Label htmlFor="summary-topic-input" className="text-left block">{translate('summaryTopicPlaceholder')}</Label>
             <Textarea
