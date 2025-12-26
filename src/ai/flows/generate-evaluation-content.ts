@@ -475,6 +475,14 @@ export async function generateDynamicEvaluationContent(input: GenerateDynamicEva
     
     console.log('🔑 API availability:', { hasOpenRouter, hasGoogleAPI });
     
+    // Detectar si es asignatura de matemáticas
+    const subjectLower = (input.subject || input.bookTitle || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    const topicLower = input.topic.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    const isMathSubject = /matem|math|algebra|geometr|aritmet|calculo|trigonometr|ecuacion|numero|fraccion|decimal|porcentaje|division|multiplicacion|suma|resta/i.test(subjectLower) ||
+                          /matem|math|algebra|geometr|aritmet|calculo|trigonometr|ecuacion|numero|fraccion|decimal|porcentaje|division|multiplicacion|suma|resta/i.test(topicLower);
+    
+    console.log('🔢 Math subject detection:', { isMathSubject, subject: input.subject, topic: input.topic });
+    
     // Si tenemos OpenRouter, generar preguntas reales con IA
     if (hasOpenRouter) {
       console.log('✅ Using OpenRouter to generate real evaluation questions');
@@ -484,8 +492,81 @@ export async function generateDynamicEvaluationContent(input: GenerateDynamicEva
         const mcCount = Math.round((count - tfCount) / 2);
         const msCount = count - tfCount - mcCount;
         
-        const prompt = isEs 
-          ? `Eres un profesor experto en educación. Genera una evaluación educativa sobre el tema "${input.topic}" para el curso "${input.course || 'General'}" en la asignatura "${input.subject || input.bookTitle}".
+        // Prompt especial para matemáticas
+        const mathPromptEs = `Eres un profesor experto en MATEMÁTICAS. Genera una evaluación con PROBLEMAS MATEMÁTICOS REALES sobre el tema "${input.topic}" para el curso "${input.course || 'General'}".
+
+IMPORTANTE: Las preguntas deben ser PROBLEMAS MATEMÁTICOS con OPERACIONES Y CÁLCULOS que el estudiante debe resolver para encontrar la respuesta correcta.
+
+Tipos de preguntas matemáticas que DEBES generar:
+- Operaciones aritméticas (sumas, restas, multiplicaciones, divisiones)
+- Problemas de razonamiento matemático
+- Cálculos con fracciones, decimales o porcentajes según el tema
+- Ecuaciones simples o complejas según el nivel
+- Problemas de geometría con cálculos de área, perímetro, etc.
+- Problemas de lógica matemática
+
+${input.pdfContent ? `Contenido del libro para adaptar la dificultad:\n${input.pdfContent.substring(0, 2000)}` : ''}
+
+Genera exactamente ${count} preguntas en este formato JSON:
+{
+  "evaluationTitle": "Evaluación - ${input.topic}",
+  "questions": [
+    // ${tfCount} preguntas de Verdadero/Falso sobre resultados de operaciones:
+    {"id": "q1", "type": "TRUE_FALSE", "questionText": "El resultado de 25 × 4 es igual a 100", "correctAnswer": true, "explanation": "25 × 4 = 100, la operación es correcta."},
+    {"id": "q2", "type": "TRUE_FALSE", "questionText": "Si 3x = 15, entonces x = 6", "correctAnswer": false, "explanation": "Si 3x = 15, entonces x = 15 ÷ 3 = 5, no 6."},
+    // ${mcCount} preguntas de Selección Múltiple con problemas para calcular:
+    {"id": "q${tfCount + 1}", "type": "MULTIPLE_CHOICE", "questionText": "María tiene 24 manzanas y quiere repartirlas en partes iguales entre 6 amigos. ¿Cuántas manzanas le tocan a cada amigo?", "options": ["4 manzanas", "3 manzanas", "5 manzanas", "6 manzanas"], "correctAnswerIndex": 0, "explanation": "24 ÷ 6 = 4 manzanas para cada amigo."},
+    // ${msCount} preguntas de Selección Múltiple (varias correctas) sobre propiedades o resultados:
+    {"id": "q${tfCount + mcCount + 1}", "type": "MULTIPLE_SELECTION", "questionText": "¿Cuáles de las siguientes operaciones dan como resultado 12?", "options": ["3 × 4", "24 ÷ 3", "6 + 6", "15 - 2"], "correctAnswerIndices": [0, 2], "explanation": "3 × 4 = 12 y 6 + 6 = 12. Las otras dan 8 y 13 respectivamente."}
+  ]
+}
+
+Reglas IMPORTANTES para matemáticas:
+1. TODAS las preguntas deben requerir CÁLCULOS MATEMÁTICOS
+2. Incluye operaciones aritméticas, ecuaciones y problemas de razonamiento
+3. Las opciones de respuesta deben ser RESULTADOS NUMÉRICOS o expresiones matemáticas
+4. La dificultad debe ser apropiada para el tema "${input.topic}" y curso "${input.course || 'primaria'}"
+5. Incluye problemas de la vida real que requieran matemáticas
+6. Las preguntas TRUE_FALSE deben afirmar resultados de operaciones (correctos o incorrectos)
+
+Responde SOLO con el JSON, sin texto adicional.`;
+
+        const mathPromptEn = `You are an expert MATHEMATICS teacher. Generate an evaluation with REAL MATH PROBLEMS about "${input.topic}" for "${input.course || 'General'}" course.
+
+IMPORTANT: Questions must be MATH PROBLEMS with OPERATIONS AND CALCULATIONS that students must solve to find the correct answer.
+
+Types of math questions you MUST generate:
+- Arithmetic operations (addition, subtraction, multiplication, division)
+- Mathematical reasoning problems
+- Calculations with fractions, decimals or percentages according to the topic
+- Simple or complex equations according to the level
+- Geometry problems with area, perimeter calculations, etc.
+- Mathematical logic problems
+
+${input.pdfContent ? `Book content to adapt difficulty:\n${input.pdfContent.substring(0, 2000)}` : ''}
+
+Generate exactly ${count} questions in this JSON format:
+{
+  "evaluationTitle": "Evaluation - ${input.topic}",
+  "questions": [
+    // ${tfCount} True/False questions about operation results:
+    {"id": "q1", "type": "TRUE_FALSE", "questionText": "The result of 25 × 4 equals 100", "correctAnswer": true, "explanation": "25 × 4 = 100, the operation is correct."},
+    // ${mcCount} Multiple Choice questions with problems to calculate:
+    {"id": "q${tfCount + 1}", "type": "MULTIPLE_CHOICE", "questionText": "Maria has 24 apples and wants to share them equally among 6 friends. How many apples does each friend get?", "options": ["4 apples", "3 apples", "5 apples", "6 apples"], "correctAnswerIndex": 0, "explanation": "24 ÷ 6 = 4 apples for each friend."},
+    // ${msCount} Multiple Selection questions about properties or results:
+    {"id": "q${tfCount + mcCount + 1}", "type": "MULTIPLE_SELECTION", "questionText": "Which of the following operations result in 12?", "options": ["3 × 4", "24 ÷ 3", "6 + 6", "15 - 2"], "correctAnswerIndices": [0, 2], "explanation": "3 × 4 = 12 and 6 + 6 = 12."}
+  ]
+}
+
+IMPORTANT rules for math:
+1. ALL questions must require MATHEMATICAL CALCULATIONS
+2. Include arithmetic operations, equations and reasoning problems
+3. Answer options must be NUMERICAL RESULTS or mathematical expressions
+4. Difficulty should be appropriate for "${input.topic}" and "${input.course || 'elementary'}" level
+
+Respond ONLY with JSON, no additional text.`;
+
+        const generalPromptEs = `Eres un profesor experto en educación. Genera una evaluación educativa sobre el tema "${input.topic}" para el curso "${input.course || 'General'}" en la asignatura "${input.subject || input.bookTitle}".
 
 IMPORTANTE: Las preguntas deben ser sobre el CONTENIDO REAL del tema "${input.topic}". NO generes preguntas sobre "qué es una asignatura" o "qué son objetivos de aprendizaje". Las preguntas deben evaluar CONOCIMIENTO ESPECÍFICO del tema.
 
@@ -512,8 +593,9 @@ Reglas:
 5. Genera preguntas variadas y educativas que evalúen comprensión real
 6. NO incluyas preguntas genéricas sobre "asignaturas" o "objetivos de aprendizaje"
 
-Responde SOLO con el JSON, sin texto adicional.`
-          : `You are an expert teacher. Generate an educational evaluation about "${input.topic}" for "${input.course || 'General'}" course in "${input.subject || input.bookTitle}" subject.
+Responde SOLO con el JSON, sin texto adicional.`;
+
+        const generalPromptEn = `You are an expert teacher. Generate an educational evaluation about "${input.topic}" for "${input.course || 'General'}" course in "${input.subject || input.bookTitle}" subject.
 
 IMPORTANT: Questions must be about the REAL CONTENT of "${input.topic}". Do NOT generate questions about "what is a subject" or "what are learning objectives". Questions must evaluate SPECIFIC KNOWLEDGE of the topic.
 
@@ -541,6 +623,11 @@ Rules:
 6. Do NOT include generic questions about "subjects" or "learning objectives"
 
 Respond ONLY with JSON, no additional text.`;
+
+        // Seleccionar el prompt apropiado
+        const prompt = isMathSubject 
+          ? (isEs ? mathPromptEs : mathPromptEn)
+          : (isEs ? generalPromptEs : generalPromptEn);
 
         const aiResponse = await generateWithAI(prompt, {
           temperature: 0.7,
@@ -817,12 +904,44 @@ Respond ONLY with JSON, no additional text.`;
         }
         
         // Fallback con contenido educativo específico del tema
-        const topicLower = input.topic.toLowerCase();
+        const topicLowerFallback = input.topic.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
         let question = '';
         let answer = true;
         let explanation = '';
         
-        if (topicLower.includes('respiratorio')) {
+        // MATEMÁTICAS: Generar problemas con operaciones
+        if (isMathSubject) {
+          // Banco de problemas matemáticos V/F
+          const mathTrueFalseProblems = [
+            // Operaciones correctas (verdaderas)
+            { q: 'El resultado de 15 + 27 es igual a 42', a: true, e: '15 + 27 = 42. La suma es correcta.' },
+            { q: 'El resultado de 8 × 7 es igual a 56', a: true, e: '8 × 7 = 56. La multiplicación es correcta.' },
+            { q: 'El resultado de 144 ÷ 12 es igual a 12', a: true, e: '144 ÷ 12 = 12. La división es correcta.' },
+            { q: 'El resultado de 100 - 37 es igual a 63', a: true, e: '100 - 37 = 63. La resta es correcta.' },
+            { q: 'Si 4x = 20, entonces x = 5', a: true, e: 'Para encontrar x: x = 20 ÷ 4 = 5.' },
+            { q: 'El resultado de 3² + 4² es igual a 25', a: true, e: '3² + 4² = 9 + 16 = 25. Es el teorema de Pitágoras para 3-4-5.' },
+            { q: 'La mitad de 84 es 42', a: true, e: '84 ÷ 2 = 42. La división es correcta.' },
+            { q: 'El doble de 35 es 70', a: true, e: '35 × 2 = 70. La multiplicación es correcta.' },
+            { q: 'El resultado de 25% de 80 es 20', a: true, e: '25% de 80 = 80 × 0.25 = 20.' },
+            { q: 'El resultado de 1/2 + 1/4 es igual a 3/4', a: true, e: '1/2 + 1/4 = 2/4 + 1/4 = 3/4.' },
+            // Operaciones incorrectas (falsas)
+            { q: 'El resultado de 9 × 8 es igual a 63', a: false, e: '9 × 8 = 72, no 63.' },
+            { q: 'El resultado de 56 ÷ 7 es igual a 9', a: false, e: '56 ÷ 7 = 8, no 9.' },
+            { q: 'El resultado de 45 + 38 es igual a 73', a: false, e: '45 + 38 = 83, no 73.' },
+            { q: 'Si 5x = 30, entonces x = 7', a: false, e: 'Si 5x = 30, entonces x = 30 ÷ 5 = 6, no 7.' },
+            { q: 'El resultado de 2³ es igual a 6', a: false, e: '2³ = 2 × 2 × 2 = 8, no 6.' },
+            { q: 'El 50% de 60 es 25', a: false, e: '50% de 60 = 60 × 0.5 = 30, no 25.' },
+            { q: 'El triple de 15 es 50', a: false, e: '15 × 3 = 45, no 50.' },
+            { q: 'El resultado de 1/3 + 1/3 es igual a 2/6', a: false, e: '1/3 + 1/3 = 2/3, no 2/6.' },
+            { q: 'El cuadrado de 7 es 45', a: false, e: '7² = 7 × 7 = 49, no 45.' },
+            { q: 'El resultado de 120 - 85 es igual a 45', a: false, e: '120 - 85 = 35, no 45.' }
+          ];
+          
+          const problem = mathTrueFalseProblems[index % mathTrueFalseProblems.length];
+          question = isEs ? problem.q : problem.q.replace('El resultado de', 'The result of').replace('es igual a', 'equals').replace('entonces', 'then').replace('La mitad de', 'Half of').replace('El doble de', 'Double of').replace('El triple de', 'Triple of').replace('El cuadrado de', 'The square of');
+          answer = problem.a;
+          explanation = isEs ? problem.e : problem.e.replace('La suma es correcta', 'The addition is correct').replace('La multiplicación es correcta', 'The multiplication is correct').replace('La división es correcta', 'The division is correct').replace('La resta es correcta', 'The subtraction is correct');
+        } else if (topicLowerFallback.includes('respiratorio')) {
           if (isTrue) {
             question = isEs ? 'Los pulmones son los órganos principales del sistema respiratorio.' : 'The lungs are the main organs of the respiratory system.';
             answer = true;
@@ -1110,6 +1229,49 @@ Respond ONLY with JSON, no additional text.`;
         let options: string[];
         let questionText: string;
         
+        // MATEMÁTICAS: Problemas con cálculos
+        if (isMathSubject) {
+          const mathProblems = [
+            // Problemas de suma y resta
+            { q: 'María tiene 45 caramelos y le regalan 28 más. ¿Cuántos caramelos tiene ahora?', opts: ['73 caramelos', '63 caramelos', '83 caramelos', '53 caramelos'], correct: 0, e: '45 + 28 = 73 caramelos.' },
+            { q: 'Juan tenía 92 estampillas y regaló 37. ¿Cuántas estampillas le quedan?', opts: ['55 estampillas', '65 estampillas', '45 estampillas', '129 estampillas'], correct: 0, e: '92 - 37 = 55 estampillas.' },
+            // Problemas de multiplicación
+            { q: 'Un paquete tiene 8 galletas. Si compras 7 paquetes, ¿cuántas galletas tienes en total?', opts: ['56 galletas', '48 galletas', '64 galletas', '15 galletas'], correct: 0, e: '8 × 7 = 56 galletas.' },
+            { q: 'Una caja tiene 12 lápices. ¿Cuántos lápices hay en 9 cajas?', opts: ['108 lápices', '98 lápices', '118 lápices', '21 lápices'], correct: 0, e: '12 × 9 = 108 lápices.' },
+            // Problemas de división
+            { q: 'Si tienes 72 manzanas y las repartes entre 8 personas por igual, ¿cuántas manzanas recibe cada uno?', opts: ['9 manzanas', '8 manzanas', '10 manzanas', '7 manzanas'], correct: 0, e: '72 ÷ 8 = 9 manzanas para cada persona.' },
+            { q: 'Una biblioteca tiene 156 libros para organizar en 12 estantes iguales. ¿Cuántos libros van en cada estante?', opts: ['13 libros', '12 libros', '14 libros', '15 libros'], correct: 0, e: '156 ÷ 12 = 13 libros por estante.' },
+            // Problemas de fracciones
+            { q: 'Si comes 3/8 de una pizza y tu hermano come 2/8, ¿cuánto comieron entre los dos?', opts: ['5/8 de pizza', '5/16 de pizza', '1/2 de pizza', '6/8 de pizza'], correct: 0, e: '3/8 + 2/8 = 5/8 de pizza.' },
+            { q: '¿Cuánto es 1/4 + 1/2?', opts: ['3/4', '2/6', '1/6', '2/4'], correct: 0, e: '1/4 + 1/2 = 1/4 + 2/4 = 3/4.' },
+            // Problemas de porcentajes
+            { q: 'Una tienda ofrece 20% de descuento en un artículo de $80. ¿Cuánto cuesta con el descuento?', opts: ['$64', '$60', '$72', '$68'], correct: 0, e: '20% de $80 = $16 de descuento. $80 - $16 = $64.' },
+            { q: 'Si el 25% de un número es 15, ¿cuál es el número?', opts: ['60', '45', '75', '40'], correct: 0, e: 'Si 25% = 15, entonces 100% = 15 × 4 = 60.' },
+            // Problemas de ecuaciones
+            { q: 'Si 3x + 5 = 20, ¿cuál es el valor de x?', opts: ['5', '6', '4', '7'], correct: 0, e: '3x + 5 = 20 → 3x = 15 → x = 5.' },
+            { q: 'Si el doble de un número más 8 es igual a 22, ¿cuál es el número?', opts: ['7', '8', '6', '9'], correct: 0, e: '2x + 8 = 22 → 2x = 14 → x = 7.' },
+            // Problemas de geometría
+            { q: 'Un rectángulo tiene 8 cm de largo y 5 cm de ancho. ¿Cuál es su área?', opts: ['40 cm²', '26 cm²', '35 cm²', '45 cm²'], correct: 0, e: 'Área = largo × ancho = 8 × 5 = 40 cm².' },
+            { q: '¿Cuál es el perímetro de un cuadrado de 9 cm de lado?', opts: ['36 cm', '81 cm', '27 cm', '18 cm'], correct: 0, e: 'Perímetro = 4 × lado = 4 × 9 = 36 cm.' },
+            // Problemas de potencias
+            { q: '¿Cuál es el resultado de 5²?', opts: ['25', '10', '52', '125'], correct: 0, e: '5² = 5 × 5 = 25.' },
+            { q: '¿Cuánto es 2⁴?', opts: ['16', '8', '24', '32'], correct: 0, e: '2⁴ = 2 × 2 × 2 × 2 = 16.' }
+          ];
+          
+          const problem = mathProblems[index % mathProblems.length];
+          questionText = isEs ? problem.q : problem.q;
+          options = problem.opts;
+          
+          return {
+            id: makeId(questions.length),
+            type: 'MULTIPLE_CHOICE',
+            questionText,
+            options,
+            correctAnswerIndex: problem.correct,
+            explanation: isEs ? problem.e : problem.e
+          };
+        }
+        
         if (topicLower.includes('respiratorio')) {
           options = isEs ? [
             'Los pulmones realizan el intercambio de oxígeno y dióxido de carbono',
@@ -1360,6 +1522,43 @@ Respond ONLY with JSON, no additional text.`;
         let options: string[];
         let questionText: string;
         let explanation: string;
+        
+        // MATEMÁTICAS: Preguntas de selección múltiple con varias respuestas correctas
+        if (isMathSubject) {
+          const mathMultipleSelection = [
+            // Operaciones con mismo resultado
+            { q: '¿Cuáles de las siguientes operaciones dan como resultado 24?', opts: ['6 × 4', '30 - 5', '48 ÷ 2', '20 + 5'], correct: [0, 2], e: '6 × 4 = 24 y 48 ÷ 2 = 24. Las otras dan 25.' },
+            { q: '¿Cuáles de las siguientes operaciones dan como resultado 36?', opts: ['6 × 6', '42 - 6', '72 ÷ 3', '30 + 6'], correct: [0, 1, 2], e: '6 × 6 = 36, 42 - 6 = 36, y 72 ÷ 3 = 24 (no), 30 + 6 = 36. Correctas: 6×6, 42-6, 30+6.' },
+            { q: '¿Cuáles de las siguientes operaciones dan como resultado 15?', opts: ['3 × 5', '18 - 3', '45 ÷ 3', '8 + 6'], correct: [0, 1, 2], e: '3 × 5 = 15, 18 - 3 = 15, 45 ÷ 3 = 15. Solo 8 + 6 = 14.' },
+            // Propiedades de números
+            { q: '¿Cuáles de los siguientes son números pares?', opts: ['14', '23', '36', '41'], correct: [0, 2], e: '14 y 36 son pares (divisibles por 2). 23 y 41 son impares.' },
+            { q: '¿Cuáles de los siguientes son múltiplos de 5?', opts: ['25', '32', '45', '53'], correct: [0, 2], e: '25 y 45 terminan en 0 o 5, son múltiplos de 5.' },
+            { q: '¿Cuáles de los siguientes son números primos?', opts: ['7', '9', '11', '15'], correct: [0, 2], e: '7 y 11 son primos. 9 = 3×3 y 15 = 3×5 no lo son.' },
+            // Fracciones equivalentes
+            { q: '¿Cuáles fracciones son equivalentes a 1/2?', opts: ['2/4', '3/5', '4/8', '5/9'], correct: [0, 2], e: '2/4 = 1/2 y 4/8 = 1/2 son equivalentes.' },
+            { q: '¿Cuáles fracciones son equivalentes a 2/3?', opts: ['4/6', '3/4', '6/9', '5/6'], correct: [0, 2], e: '4/6 = 2/3 y 6/9 = 2/3 son equivalentes.' },
+            // Propiedades geométricas
+            { q: '¿Cuáles de las siguientes figuras tienen 4 lados?', opts: ['Cuadrado', 'Triángulo', 'Rectángulo', 'Círculo'], correct: [0, 2], e: 'El cuadrado y el rectángulo tienen 4 lados.' },
+            { q: '¿Cuáles de los siguientes ángulos son agudos?', opts: ['30°', '90°', '45°', '180°'], correct: [0, 2], e: '30° y 45° son menores que 90°, por lo tanto son agudos.' },
+            // Ecuaciones correctas
+            { q: '¿En cuáles ecuaciones x = 4?', opts: ['2x = 8', '3x = 15', 'x + 5 = 9', 'x - 2 = 3'], correct: [0, 2], e: '2×4 = 8 ✓ y 4+5 = 9 ✓. En las otras x = 5.' },
+            { q: '¿Cuáles expresiones son iguales a 20?', opts: ['4 × 5', '25 - 6', '100 ÷ 5', '12 + 8'], correct: [0, 2, 3], e: '4×5 = 20, 100÷5 = 20, 12+8 = 20. Solo 25-6 = 19.' }
+          ];
+          
+          const problem = mathMultipleSelection[index % mathMultipleSelection.length];
+          options = problem.opts;
+          questionText = isEs ? problem.q : problem.q;
+          explanation = isEs ? problem.e : problem.e;
+          
+          return {
+            id: makeId(questions.length),
+            type: 'MULTIPLE_SELECTION',
+            questionText,
+            options,
+            correctAnswerIndices: problem.correct,
+            explanation
+          };
+        }
         
         if (topicLower.includes('respiratorio')) {
           options = isEs ? [
