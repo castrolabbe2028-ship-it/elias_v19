@@ -10,7 +10,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/com
 import { FileQuestion, Sparkles, Download, Newspaper, Network, ClipboardList, BookOpen, Loader2 } from 'lucide-react';
 import { BookCourseSelector } from '@/components/common/book-course-selector';
 import { generateQuiz } from '@/ai/flows/generate-quiz';
-import { analyzeMathPdfTopics } from '@/ai/flows/analyze-math-pdf-topics';
+import { analyzeSubjectTopics } from '@/ai/flows/analyze-subject-topics';
 import { useToast } from "@/hooks/use-toast";
 import { useAIProgress } from "@/hooks/use-ai-progress";
 import { Label } from '@/components/ui/label';
@@ -35,62 +35,77 @@ export default function CuestionarioPage() {
   const [quizResult, setQuizResult] = useState('');
   const [currentTopicForDisplay, setCurrentTopicForDisplay] = useState('');
   
-  // Estados para análisis automático de PDF de matemáticas
-  const [mathTopics, setMathTopics] = useState<string[]>([]);
-  const [selectedMathTopic, setSelectedMathTopic] = useState<string>('');
-  const [isAnalyzingPdf, setIsAnalyzingPdf] = useState(false);
-  const [mathBookTitle, setMathBookTitle] = useState<string>('');
+  // Estados para análisis automático de temas de cualquier asignatura
+  const [subjectTopics, setSubjectTopics] = useState<string[]>([]);
+  const [selectedSubjectTopic, setSelectedSubjectTopic] = useState<string>('');
+  const [isAnalyzingSubject, setIsAnalyzingSubject] = useState(false);
+  const [subjectBookTitle, setSubjectBookTitle] = useState<string>('');
   
   // Ref para evitar llamadas duplicadas
   const isGeneratingRef = useRef(false);
   const hasAnalyzedRef = useRef<string>('');
 
-  // Detectar si es asignatura de matemáticas
-  const isMathSelection = useMemo(() => {
+  // Detectar el tipo de asignatura para mostrar icono apropiado
+  const subjectIcon = useMemo(() => {
     const s = `${selectedBook || ''} ${selectedSubject || ''}`.toLowerCase();
-    return /matem|math|algebra|geometr|trigonom|calculo|aritmet|matriz|matrices|estadistic|probabil/i.test(s);
+    if (/matem|math|algebra|geometr/i.test(s)) return '🔢';
+    if (/lenguaje|comunicacion|language|literatura/i.test(s)) return '📚';
+    if (/ciencia|natural|science|biolog/i.test(s)) return '🔬';
+    if (/historia|geography|social|civica/i.test(s)) return '🌍';
+    return '📖';
   }, [selectedBook, selectedSubject]);
 
-  // Analizar automáticamente el PDF de matemáticas cuando se selecciona la asignatura
+  // Limpiar estados cuando cambia el curso o la asignatura
+  useEffect(() => {
+    setQuizResult('');
+    setCurrentTopicForDisplay('');
+    setTopic('');
+  }, [selectedCourse, selectedSubject]);
+
+  // Analizar automáticamente los temas cuando se selecciona cualquier asignatura
   useEffect(() => {
     const analyzeKey = `${selectedCourse}_${selectedSubject}`;
     
-    if (isMathSelection && selectedCourse && hasAnalyzedRef.current !== analyzeKey) {
+    if (selectedCourse && selectedSubject && hasAnalyzedRef.current !== analyzeKey) {
       hasAnalyzedRef.current = analyzeKey;
-      setIsAnalyzingPdf(true);
-      setMathTopics([]);
-      setSelectedMathTopic('');
-      setMathBookTitle('');
+      setIsAnalyzingSubject(true);
+      setSubjectTopics([]);
+      setSelectedSubjectTopic('');
+      setSubjectBookTitle('');
       
-      analyzeMathPdfTopics({
+      console.log('[Quiz] Starting subject analysis for:', selectedCourse, selectedSubject);
+      
+      analyzeSubjectTopics({
         courseName: selectedCourse,
+        subjectName: selectedSubject,
         language: currentUiLanguage,
       }).then((res) => {
+        console.log('[Quiz] Subject analysis result:', res);
         if (res.topics && res.topics.length > 0) {
-          setMathTopics(res.topics);
-          setMathBookTitle(res.bookTitle || '');
+          setSubjectTopics(res.topics);
+          setSubjectBookTitle(res.bookTitle || '');
           toast({
-            title: translate('quizPdfAnalyzeDone', { defaultValue: 'Análisis completado' }),
-            description: `${translate('quizPdfTopicsFound', { defaultValue: 'Temas detectados' })}: ${res.topics.length}`,
+            title: translate('quizPdfAnalyzeDone') || 'Análisis completado',
+            description: `${translate('quizPdfTopicsFound') || 'Temas detectados'}: ${res.topics.length}`,
             variant: 'default',
           });
         }
       }).catch((e) => {
-        console.error('[Quiz] Error analizando PDF:', e);
+        console.error('[Quiz] Error analizando asignatura:', e);
       }).finally(() => {
-        setIsAnalyzingPdf(false);
+        setIsAnalyzingSubject(false);
       });
-    } else if (!isMathSelection) {
-      // Limpiar cuando no es matemáticas
-      setMathTopics([]);
-      setSelectedMathTopic('');
-      setMathBookTitle('');
+    } else if (!selectedSubject) {
+      // Limpiar cuando no hay asignatura
+      setSubjectTopics([]);
+      setSelectedSubjectTopic('');
+      setSubjectBookTitle('');
     }
-  }, [isMathSelection, selectedCourse, selectedSubject, currentUiLanguage, toast, translate]);
+  }, [selectedCourse, selectedSubject, currentUiLanguage, toast, translate]);
 
-  // Cuando se selecciona un tema del PDF, actualizar el campo de tema
-  const handleSelectMathTopic = useCallback((value: string) => {
-    setSelectedMathTopic(value);
+  // Cuando se selecciona un tema de la asignatura, actualizar el campo de tema
+  const handleSubjectTopicSelect = useCallback((value: string) => {
+    setSelectedSubjectTopic(value);
     if (value) setTopic(value);
   }, []);
 
@@ -311,7 +326,8 @@ export default function CuestionarioPage() {
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
-           <BookCourseSelector
+
+          <BookCourseSelector
             selectedCourse={selectedCourse}
             selectedBook={selectedBook}
             selectedSubject={selectedSubject}
@@ -322,37 +338,37 @@ export default function CuestionarioPage() {
             onSubjectChange={setSelectedSubject}
           />
 
-          {/* Sección automática de temas de matemáticas desde el PDF de la biblioteca */}
-          {isMathSelection && (
+          {/* Sección automática de temas desde el libro de la asignatura seleccionada */}
+          {selectedCourse && selectedSubject && (
             <div className="space-y-3 p-4 border border-cyan-500/30 rounded-lg bg-cyan-500/5">
               <div className="space-y-1">
                 <Label className="text-left block font-semibold text-cyan-600 dark:text-cyan-400">
                   <BookOpen className="w-4 h-4 inline mr-2" />
-                  {translate('quizMathPdfTitle', { defaultValue: 'Temas del Libro de Matemáticas' })}
+                  {subjectIcon} {translate('quizSubjectTopicsTitle') || 'Temas de la Asignatura'}
                 </Label>
-                {mathBookTitle && (
+                {subjectBookTitle && (
                   <p className="text-left text-xs text-muted-foreground">
-                    📚 {mathBookTitle}
+                    📚 {subjectBookTitle}
                   </p>
                 )}
               </div>
 
-              {isAnalyzingPdf ? (
+              {isAnalyzingSubject ? (
                 <div className="flex items-center gap-2 text-sm text-muted-foreground">
                   <Loader2 className="w-4 h-4 animate-spin" />
-                  {translate('quizMathAnalyzing', { defaultValue: 'Analizando libro de matemáticas con IA...' })}
+                  {translate('quizAnalyzingSubject') || 'Analizando temas de la asignatura con IA...'}
                 </div>
-              ) : mathTopics.length > 0 ? (
+              ) : subjectTopics.length > 0 ? (
                 <div className="space-y-2">
                   <Label className="text-left block text-sm">
-                    {translate('quizMathSelectTopic', { defaultValue: 'Selecciona un tema para generar problemas con desarrollo:' })}
+                    {translate('quizSelectTopic') || 'Selecciona un tema para generar el cuestionario:'}
                   </Label>
-                  <Select value={selectedMathTopic} onValueChange={handleSelectMathTopic}>
+                  <Select value={selectedSubjectTopic} onValueChange={handleSubjectTopicSelect}>
                     <SelectTrigger>
-                      <SelectValue placeholder={translate('quizMathChooseTopic', { defaultValue: 'Elige un tema matemático…' })} />
+                      <SelectValue placeholder={translate('quizChooseTopic') || 'Elige un tema…'} />
                     </SelectTrigger>
                     <SelectContent>
-                      {mathTopics.map((t) => (
+                      {subjectTopics.map((t) => (
                         <SelectItem key={t} value={t}>
                           {t}
                         </SelectItem>
@@ -360,12 +376,12 @@ export default function CuestionarioPage() {
                     </SelectContent>
                   </Select>
                   <p className="text-left text-xs text-muted-foreground">
-                    💡 {translate('quizMathHint', { defaultValue: 'Al generar el cuestionario, incluirá problemas con desarrollo paso a paso y verificación.' })}
+                    💡 {translate('quizTopicHint') || 'El cuestionario incluirá preguntas variadas sobre el tema seleccionado.'}
                   </p>
                 </div>
               ) : (
                 <p className="text-left text-xs text-muted-foreground">
-                  {translate('quizMathNoTopics', { defaultValue: 'Selecciona un curso para ver los temas disponibles.' })}
+                  {translate('quizNoTopics') || 'No se encontraron temas. Puedes escribir el tema manualmente.'}
                 </p>
               )}
             </div>
@@ -380,6 +396,7 @@ export default function CuestionarioPage() {
               onChange={(e) => setTopic(e.target.value)}
               placeholder={translate('quizTopicPlaceholder')}
               className="text-base md:text-sm"
+              disabled={!selectedSubject}
             />
           </div>
           <Button

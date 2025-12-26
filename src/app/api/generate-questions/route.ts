@@ -1,9 +1,12 @@
-// API Route para generar preguntas con Gemini de forma segura
+// API Route para generar preguntas con IA (OpenRouter o Gemini)
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { NextResponse } from "next/server";
+import { openrouter } from "@/lib/openrouter";
 
-// Inicializa el cliente de Gemini con tu API Key desde las variables de entorno
-// ¡IMPORTANTE! Nunca escribas la API Key directamente en el código.
+// Determinar qué proveedor de IA usar
+const useOpenRouter = !!process.env.OPENROUTER_API_KEY;
+
+// Inicializa el cliente de Gemini como fallback
 const genAI = new GoogleGenerativeAI(
   process.env.GOOGLE_AI_API_KEY || process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY || ""
 );
@@ -72,9 +75,12 @@ export async function POST(request: Request) {
     // Extraer los parámetros del cuerpo de la petición temprano (para fallback)
     const { topic, numQuestions, language = 'es' } = await request.json();
 
-    // Verificar que la API Key esté configurada; si no, usar fallback local con 200 OK
-    if (!process.env.GOOGLE_AI_API_KEY && !process.env.GOOGLE_API_KEY && !process.env.GEMINI_API_KEY) {
-      console.warn("[API Route] ⚠️ GOOGLE_AI_API_KEY/GOOGLE_API_KEY/GEMINI_API_KEY no configuradas, usando fallback local");
+    // Verificar si hay alguna API Key configurada (OpenRouter o Google)
+    const hasOpenRouter = !!process.env.OPENROUTER_API_KEY;
+    const hasGoogleAI = !!(process.env.GOOGLE_AI_API_KEY || process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY);
+    
+    if (!hasOpenRouter && !hasGoogleAI) {
+      console.warn("[API Route] ⚠️ No AI API keys configured, using local fallback");
       const questions = buildFallbackQuestions(topic, Number(numQuestions) || 5, language);
       return NextResponse.json(questions);
     }
@@ -151,12 +157,29 @@ export async function POST(request: Request) {
     `;
 
     try {
-      const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash-latest" });
-      const result = await model.generateContent(userPrompt);
-      const response = await result.response;
-      let text = response.text();
+      let text: string;
+      
+      // Usar OpenRouter si está configurado, sino usar Gemini
+      if (hasOpenRouter) {
+        console.log("[API Route] 🚀 Using OpenRouter for question generation");
+        text = await openrouter.generateContent(userPrompt, {
+          systemPrompt: language === 'es' 
+            ? 'Eres un profesor experto creando evaluaciones educativas. Responde SOLO con JSON válido.'
+            : 'You are an expert teacher creating educational evaluations. Respond ONLY with valid JSON.',
+          temperature: 0.7,
+          maxTokens: 4096,
+        });
+        console.log("[API Route] OpenRouter response received");
+      } else {
+        console.log("[API Route] 🤖 Using Gemini for question generation");
+        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash-latest" });
+        const result = await model.generateContent(userPrompt);
+        const response = await result.response;
+        text = response.text();
+        console.log("[API Route] Gemini response received");
+      }
 
-      console.log("[API Route] Respuesta recibida de Gemini:", text);
+      console.log("[API Route] AI Response:", text.substring(0, 200) + "...");
 
       // 3. Limpiar y parsear la respuesta JSON
       // A veces la IA devuelve el JSON envuelto en ```json ... ```
