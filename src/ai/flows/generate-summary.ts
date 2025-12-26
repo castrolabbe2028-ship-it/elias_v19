@@ -35,10 +35,17 @@ export type GenerateSummaryOutput = z.infer<typeof GenerateSummaryOutputSchema>;
 
 // Función para generar resumen usando OpenRouter
 async function generateWithOpenRouter(input: GenerateSummaryInput): Promise<GenerateSummaryOutput> {
+  console.log('[generate-summary] Attempting OpenRouter generation...');
+  console.log('[generate-summary] OPENROUTER_API_KEY exists:', !!process.env.OPENROUTER_API_KEY);
+  console.log('[generate-summary] OPENROUTER_API_KEY length:', process.env.OPENROUTER_API_KEY?.length || 0);
+  
   const client = getOpenRouterClient();
   if (!client) {
-    throw new Error('OpenRouter client not available');
+    console.error('[generate-summary] OpenRouter client not available - API key may be missing');
+    throw new Error('OpenRouter client not available - check OPENROUTER_API_KEY environment variable');
   }
+  
+  console.log('[generate-summary] OpenRouter client obtained successfully');
 
   const isSpanish = input.language === 'es';
   
@@ -321,11 +328,15 @@ function generateMockSummary(input: GenerateSummaryInput): GenerateSummaryOutput
 Para generar un resumen educativo sobre "${input.topic}", el sistema necesita conectarse con el servicio de IA.
 
 ### Posibles causas:
-- La API key de Google/Gemini no está configurada
+- La API key de OpenRouter no está configurada correctamente
 - El servicio de IA no está disponible temporalmente
+- Error de conexión con el servidor
 
 ### Solución:
-Por favor, contacta al administrador del sistema para verificar la configuración de la API de Gemini.
+Por favor, verifica que las variables de entorno estén configuradas correctamente:
+- OPENROUTER_API_KEY
+- OPENROUTER_BASE_URL
+- OPENROUTER_MODEL
 
 ---
 
@@ -337,11 +348,15 @@ Por favor, contacta al administrador del sistema para verificar la configuració
 To generate an educational summary about "${input.topic}", the system needs to connect to the AI service.
 
 ### Possible causes:
-- The Google/Gemini API key is not configured
+- The OpenRouter API key is not configured correctly
 - The AI service is temporarily unavailable
+- Server connection error
 
 ### Solution:
-Please contact the system administrator to verify the Gemini API configuration.
+Please verify that the environment variables are configured correctly:
+- OPENROUTER_API_KEY
+- OPENROUTER_BASE_URL
+- OPENROUTER_MODEL
 
 ---
 
