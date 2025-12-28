@@ -88,6 +88,34 @@ function isMathSubject(bookTitle: string, centralTheme?: string): boolean {
 }
 
 // =============================================================================
+// FUNCIÓN PARA DETECTAR ASIGNATURAS DE CIENCIAS CON CÁLCULOS
+// =============================================================================
+type ScienceSubjectType = 'fisica' | 'quimica' | 'biologia' | null;
+
+function detectScienceSubject(bookTitle: string, centralTheme?: string): ScienceSubjectType {
+  const lowerTitle = bookTitle.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  const lowerTheme = (centralTheme || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  const combined = lowerTitle + ' ' + lowerTheme;
+  
+  // Detectar Física
+  if (/fisica|physics|cinematica|dinamica|mecanica|optica|termodinamica|electr|magneti|ondas|movimiento|fuerza|energia|trabajo|potencia|velocidad|aceleracion|newton|joule|watt/i.test(combined)) {
+    return 'fisica';
+  }
+  
+  // Detectar Química
+  if (/quimica|chemistry|atomo|molecula|elemento|compuesto|reaccion|estequiometria|mol|concentracion|solucion|acido|base|ph|enlace|tabla periodica|valencia|oxidacion|reduccion/i.test(combined)) {
+    return 'quimica';
+  }
+  
+  // Detectar Biología con cálculos
+  if (/biologia|biology|genetica|herencia|adn|cromosoma|mitosis|meiosis|poblacion|ecosistema|cadena trofica|metabolismo|fotosintesis|respiracion celular/i.test(combined)) {
+    return 'biologia';
+  }
+  
+  return null;
+}
+
+// =============================================================================
 // PROMPT ESPECIALIZADO PARA MATEMÁTICAS
 // =============================================================================
 const generateMathMindMapStructurePrompt = ai.definePrompt({
@@ -269,9 +297,55 @@ async function generateStructureWithOpenRouter(input: CreateMindMapInput): Promi
 
   const isSpanish = input.language === 'es';
   
+  // Detectar tipo de asignatura de ciencias
+  const scienceType = detectScienceSubject(input.bookTitle, input.centralTheme);
+  console.log('[MindMap] Science subject type detected:', scienceType || 'general');
+  
   // Obtener contexto de generación basado en el curso
   const courseContext = input.courseName ? getContentGenerationContext(input.courseName) : null;
   const adaptationInstructions = courseContext ? generateAIPromptInstructions(courseContext, input.language) : '';
+  
+  // Instrucciones especiales para ciencias con cálculos
+  const getScienceInstructions = (): string => {
+    if (!scienceType) return '';
+    
+    const scienceInstr: Record<ScienceSubjectType, { es: string; en: string }> = {
+      fisica: {
+        es: `\nINSTRUCCIONES ESPECIALES PARA FÍSICA:
+- Incluye FÓRMULAS relevantes como subnodos (v=d/t, F=ma, E=mc²)
+- Agrega ramas para "Fórmulas Clave" y "Unidades de Medida"
+- Incluye ejemplos con valores numéricos`,
+        en: `\nSPECIAL INSTRUCTIONS FOR PHYSICS:
+- Include relevant FORMULAS as subnodes (v=d/t, F=ma, E=mc²)
+- Add branches for "Key Formulas" and "Units of Measurement"
+- Include examples with numerical values`
+      },
+      quimica: {
+        es: `\nINSTRUCCIONES ESPECIALES PARA QUÍMICA:
+- Incluye FÓRMULAS químicas y ecuaciones como subnodos
+- Agrega ramas para "Fórmulas y Ecuaciones" y "Cálculos"
+- Incluye ejemplos de estequiometría cuando corresponda`,
+        en: `\nSPECIAL INSTRUCTIONS FOR CHEMISTRY:
+- Include CHEMICAL FORMULAS and equations as subnodes
+- Add branches for "Formulas and Equations" and "Calculations"
+- Include stoichiometry examples when applicable`
+      },
+      biologia: {
+        es: `\nINSTRUCCIONES ESPECIALES PARA BIOLOGÍA:
+- Para genética, incluye una rama para "Cruces y Proporciones"
+- Incluye subnodos con proporciones (3:1, 9:3:3:1)
+- Para otros temas, enfócate en procesos y ciclos`,
+        en: `\nSPECIAL INSTRUCTIONS FOR BIOLOGY:
+- For genetics, include a branch for "Crosses and Ratios"
+- Include subnodes with ratios (3:1, 9:3:3:1)
+- For other topics, focus on processes and cycles`
+      }
+    };
+    
+    return scienceInstr[scienceType]?.[isSpanish ? 'es' : 'en'] || '';
+  };
+  
+  const scienceInstructions = getScienceInstructions();
   
   // Construir orientación del tema si existe
   const themeGuidance = input.themeDescription 
@@ -282,10 +356,10 @@ async function generateStructureWithOpenRouter(input: CreateMindMapInput): Promi
   
   const systemPrompt = isSpanish 
     ? `Eres un experto en diseño instruccional. Genera estructuras jerárquicas para mapas mentales educativos ADAPTADOS AL NIVEL DEL ESTUDIANTE.
-IMPORTANTE: Responde SOLO con JSON válido, sin texto adicional ni markdown.
+IMPORTANTE: Responde SOLO con JSON válido, sin texto adicional ni markdown.${scienceInstructions}
 ${adaptationInstructions}`
     : `You are an expert in instructional design. Generate hierarchical structures for educational mind maps ADAPTED TO THE STUDENT'S LEVEL.
-IMPORTANT: Respond ONLY with valid JSON, no additional text or markdown.
+IMPORTANT: Respond ONLY with valid JSON, no additional text or markdown.${scienceInstructions}
 ${adaptationInstructions}`;
 
   const userPrompt = isSpanish

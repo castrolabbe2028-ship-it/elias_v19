@@ -88,6 +88,106 @@ function isMathSubject(bookTitle: string, topic?: string): boolean {
 }
 
 // =============================================================================
+// FUNCIÓN PARA DETECTAR ASIGNATURAS CON COMPONENTE DE CÁLCULO (FÍSICA, QUÍMICA, BIOLOGÍA)
+// =============================================================================
+type ScienceSubjectType = 'fisica' | 'quimica' | 'biologia' | null;
+
+function isScienceWithCalculations(bookTitle: string, topic?: string): ScienceSubjectType {
+  const lowerTitle = normalizeForMatch(bookTitle);
+  const lowerTopic = normalizeForMatch(topic || '');
+  const combined = lowerTitle + ' ' + lowerTopic;
+  
+  // Detectar Física
+  if (/fisica|physics|cinematica|dinamica|mecanica|optica|termodinamica|electr|magneti|ondas|movimiento|fuerza|energia|trabajo|potencia|velocidad|aceleracion|newton|joule|watt/i.test(combined)) {
+    return 'fisica';
+  }
+  
+  // Detectar Química
+  if (/quimica|chemistry|atomo|molecula|elemento|compuesto|reaccion|estequiometria|mol|concentracion|solucion|acido|base|ph|enlace|tabla periodica|valencia|oxidacion|reduccion/i.test(combined)) {
+    return 'quimica';
+  }
+  
+  // Detectar Biología con cálculos
+  if (/biologia|biology|genetica|herencia|probabilidad genetica|adn|cromosoma|mitosis|meiosis|poblacion|ecosistema|cadena trofica|ciclo|metabolismo|fotosintesis|respiracion celular/i.test(combined)) {
+    return 'biologia';
+  }
+  
+  return null;
+}
+
+// Función para obtener instrucciones específicas de cálculo por asignatura
+function getScienceCalculationInstructions(subjectType: ScienceSubjectType, language: 'es' | 'en'): string {
+  if (!subjectType) return '';
+  
+  const instructions: Record<ScienceSubjectType, { es: string; en: string }> = {
+    fisica: {
+      es: `IMPORTANTE - FÍSICA CON CÁLCULOS:
+Esta es una asignatura de FÍSICA que requiere tanto TEORÍA como PROBLEMAS CON CÁLCULOS.
+Incluye problemas que requieran:
+- Aplicar fórmulas (v = d/t, F = m×a, E = m×c², P = W/t, etc.)
+- Calcular magnitudes físicas (velocidad, aceleración, fuerza, energía, trabajo, potencia)
+- Resolver problemas de cinemática y dinámica
+- Conversión de unidades (m/s a km/h, Joules a calorías, etc.)
+- Análisis de gráficos de movimiento
+Los problemas deben mostrar el desarrollo paso a paso con las fórmulas aplicadas.`,
+      en: `IMPORTANT - PHYSICS WITH CALCULATIONS:
+This is a PHYSICS subject that requires both THEORY and CALCULATION PROBLEMS.
+Include problems that require:
+- Applying formulas (v = d/t, F = m×a, E = m×c², P = W/t, etc.)
+- Calculating physical magnitudes (velocity, acceleration, force, energy, work, power)
+- Solving kinematics and dynamics problems
+- Unit conversion (m/s to km/h, Joules to calories, etc.)
+- Motion graph analysis
+Problems must show step-by-step development with applied formulas.`
+    },
+    quimica: {
+      es: `IMPORTANTE - QUÍMICA CON CÁLCULOS:
+Esta es una asignatura de QUÍMICA que requiere tanto TEORÍA como PROBLEMAS CON CÁLCULOS.
+Incluye problemas que requieran:
+- Cálculos estequiométricos (moles, masa molar, reactivo limitante)
+- Balanceo de ecuaciones químicas
+- Cálculos de concentración (molaridad, % masa/volumen)
+- Cálculos de pH y pOH
+- Problemas de diluciones
+- Cálculos de rendimiento de reacciones
+Los problemas deben mostrar el desarrollo paso a paso con las fórmulas aplicadas.`,
+      en: `IMPORTANT - CHEMISTRY WITH CALCULATIONS:
+This is a CHEMISTRY subject that requires both THEORY and CALCULATION PROBLEMS.
+Include problems that require:
+- Stoichiometric calculations (moles, molar mass, limiting reagent)
+- Balancing chemical equations
+- Concentration calculations (molarity, % mass/volume)
+- pH and pOH calculations
+- Dilution problems
+- Reaction yield calculations
+Problems must show step-by-step development with applied formulas.`
+    },
+    biologia: {
+      es: `IMPORTANTE - BIOLOGÍA CON CÁLCULOS:
+Esta es una asignatura de BIOLOGÍA que incluye TEORÍA y algunos PROBLEMAS CON CÁLCULOS.
+Incluye problemas que requieran:
+- Cálculos de probabilidad genética (cruces monohíbridos, dihíbridos, cuadros de Punnett)
+- Proporciones fenotípicas y genotípicas
+- Cálculos de frecuencias alélicas en poblaciones
+- Problemas de cadenas tróficas y transferencia de energía
+- Cálculos de tasas de crecimiento poblacional
+Combina preguntas teóricas con problemas de aplicación matemática.`,
+      en: `IMPORTANT - BIOLOGY WITH CALCULATIONS:
+This is a BIOLOGY subject that includes THEORY and some CALCULATION PROBLEMS.
+Include problems that require:
+- Genetic probability calculations (monohybrid, dihybrid crosses, Punnett squares)
+- Phenotypic and genotypic ratios
+- Allele frequency calculations in populations
+- Food chain and energy transfer problems
+- Population growth rate calculations
+Combine theoretical questions with mathematical application problems.`
+    }
+  };
+  
+  return instructions[subjectType]?.[language] || '';
+}
+
+// =============================================================================
 // BANCO DE PROBLEMAS MATEMÁTICOS CON DESARROLLO PARA 1RO BÁSICO
 // =============================================================================
 const mathProblemBanks: Record<string, Array<{ q: string; a: string }>> = {
@@ -4476,16 +4576,18 @@ function capitalizeFirstLetter(text: string): string {
 export async function generateQuiz(input: GenerateQuizInput): Promise<GenerateQuizOutput> {
   const cacheKey = makeQuizCacheKey(input);
   const isMath = isMathSubject(input.bookTitle || '', input.topic || '');
+  const scienceType = isScienceWithCalculations(input.bookTitle || '', input.topic || '');
+  const hasCalculations = isMath || scienceType !== null;
   
-  // Para matemáticas, NO usar caché para asegurar que se generen problemas del tema específico
-  if (!isMath) {
+  // Para matemáticas y ciencias con cálculos, NO usar caché para asegurar que se generen problemas del tema específico
+  if (!hasCalculations) {
     const cachedOut = quizOutputCache.get(cacheKey);
     if (cachedOut && Date.now() - cachedOut.timestamp < QUIZ_OUTPUT_TTL) {
       console.log('[generate-quiz] Usando quiz HTML desde caché para:', input.topic);
       return cachedOut.output;
     }
   } else {
-    console.log('[generate-quiz] 📐 Matemáticas detectada - saltando caché para tema:', input.topic);
+    console.log(`[generate-quiz] 📐 ${isMath ? 'Matemáticas' : scienceType?.toUpperCase()} detectada - saltando caché para tema:`, input.topic);
   }
 
   const inFlight = quizInFlight.get(cacheKey);
@@ -4497,10 +4599,19 @@ export async function generateQuiz(input: GenerateQuizInput): Promise<GenerateQu
   const work = (async (): Promise<GenerateQuizOutput> => {
     try {
       const isSpanish = input.language === 'es';
-      const titlePrefix = isMath 
-        ? (isSpanish ? 'PROBLEMAS DE MATEMÁTICAS' : 'MATH PROBLEMS')
-        : (isSpanish ? 'CUESTIONARIO' : 'QUIZ');
+      // Determinar el título según el tipo de asignatura
+      const getTitlePrefix = () => {
+        if (isMath) return isSpanish ? 'PROBLEMAS DE MATEMÁTICAS' : 'MATH PROBLEMS';
+        if (scienceType === 'fisica') return isSpanish ? 'CUESTIONARIO Y PROBLEMAS DE FÍSICA' : 'PHYSICS QUIZ AND PROBLEMS';
+        if (scienceType === 'quimica') return isSpanish ? 'CUESTIONARIO Y PROBLEMAS DE QUÍMICA' : 'CHEMISTRY QUIZ AND PROBLEMS';
+        if (scienceType === 'biologia') return isSpanish ? 'CUESTIONARIO Y PROBLEMAS DE BIOLOGÍA' : 'BIOLOGY QUIZ AND PROBLEMS';
+        return isSpanish ? 'CUESTIONARIO' : 'QUIZ';
+      };
+      const titlePrefix = getTitlePrefix();
       const topicUpper = input.topic.toUpperCase();
+      
+      // Obtener instrucciones especiales para ciencias con cálculos
+      const scienceInstructions = scienceType ? getScienceCalculationInstructions(scienceType, isSpanish ? 'es' : 'en') : '';
       
       // Obtener contexto de generación basado en el curso
       const courseContext = input.courseName ? getContentGenerationContext(input.courseName) : null;
@@ -4530,8 +4641,12 @@ ${adaptationInstructions}`
               
 ${adaptationInstructions}`;
             
-            const userPrompt = isMath ? (isSpanish 
-              ? `Genera un cuestionario de 15 PROBLEMAS DE MATEMÁTICAS sobre "${input.topic}" para ${input.courseName}.${topicGuidance}
+            // Función para generar el prompt según el tipo de asignatura
+            const getUserPrompt = (): string => {
+              // Para Matemáticas puras
+              if (isMath) {
+                return isSpanish 
+                  ? `Genera un cuestionario de 15 PROBLEMAS DE MATEMÁTICAS sobre "${input.topic}" para ${input.courseName}.${topicGuidance}
 
 ${courseContext ? `⚠️ IMPORTANTE: El estudiante tiene aproximadamente ${courseContext.approximateAge} años. Adapta la dificultad de los problemas a su nivel.` : ''}
 
@@ -4551,7 +4666,7 @@ Responde en JSON con formato:
 }
 
 Responde SOLO con JSON válido.`
-              : `Generate a quiz with 15 MATH PROBLEMS about "${input.topic}" for ${input.courseName}.${topicGuidance}
+                  : `Generate a quiz with 15 MATH PROBLEMS about "${input.topic}" for ${input.courseName}.${topicGuidance}
 
 ${courseContext ? `⚠️ IMPORTANT: The student is approximately ${courseContext.approximateAge} years old. Adapt the difficulty of the problems to their level.` : ''}
 
@@ -4567,8 +4682,81 @@ Respond in JSON format:
   ]
 }
 
-Respond ONLY with valid JSON.`)
-            : (isSpanish 
+Respond ONLY with valid JSON.`;
+              }
+              
+              // Para Física, Química, Biología (ciencias con cálculos)
+              if (scienceType) {
+                const subjectEmoji = scienceType === 'fisica' ? '⚡' : scienceType === 'quimica' ? '🧪' : '🧬';
+                return isSpanish 
+                  ? `Genera un cuestionario de 15 preguntas sobre "${input.topic}" para ${input.courseName}.${topicGuidance}
+
+${scienceInstructions}
+
+${courseContext ? `⚠️ IMPORTANTE: El estudiante tiene aproximadamente ${courseContext.approximateAge} años. Adapta la dificultad al nivel del estudiante.` : ''}
+
+DISTRIBUCIÓN DE PREGUNTAS:
+- 8 preguntas TEÓRICAS (conceptos, definiciones, explicaciones)
+- 7 preguntas PRÁCTICAS (problemas con cálculos, aplicación de fórmulas)
+
+Para preguntas TEÓRICAS:
+- Usar emojis como 📚, 🔬, 💡
+- Respuestas explicativas y conceptuales
+
+Para preguntas PRÁCTICAS/CÁLCULOS:
+- Usar emojis como ${subjectEmoji}, 🔢, 📊
+- Incluir en la respuesta:
+  📝 DATOS: identificación de variables
+  📐 FÓRMULA: ecuación a usar
+  🔄 DESARROLLO: paso a paso
+  ✅ RESPUESTA: resultado con unidades
+  🔍 VERIFICACIÓN: comprobación
+
+Responde en JSON con formato:
+{
+  "quizTitle": "${titlePrefix} - ${topicUpper}",
+  "questions": [
+    {"questionText": "${subjectEmoji} Pregunta/Problema 1: ...", "expectedAnswer": "Respuesta detallada..."}
+  ]
+}
+
+Responde SOLO con JSON válido.`
+                  : `Generate a quiz with 15 questions about "${input.topic}" for ${input.courseName}.${topicGuidance}
+
+${scienceInstructions}
+
+${courseContext ? `⚠️ IMPORTANT: The student is approximately ${courseContext.approximateAge} years old. Adapt difficulty to the student's level.` : ''}
+
+QUESTION DISTRIBUTION:
+- 8 THEORETICAL questions (concepts, definitions, explanations)
+- 7 PRACTICAL questions (problems with calculations, formula application)
+
+For THEORETICAL questions:
+- Use emojis like 📚, 🔬, 💡
+- Explanatory and conceptual answers
+
+For PRACTICAL/CALCULATION questions:
+- Use emojis like ${subjectEmoji}, 🔢, 📊
+- Include in the answer:
+  📝 DATA: variable identification
+  📐 FORMULA: equation to use
+  🔄 SOLUTION: step by step
+  ✅ ANSWER: result with units
+  🔍 VERIFICATION: check
+
+Respond in JSON format:
+{
+  "quizTitle": "${titlePrefix} - ${topicUpper}",
+  "questions": [
+    {"questionText": "${subjectEmoji} Question/Problem 1: ...", "expectedAnswer": "Detailed answer..."}
+  ]
+}
+
+Respond ONLY with valid JSON.`;
+              }
+              
+              // Para otras asignaturas (sin cálculos)
+              return isSpanish 
               ? `Genera un cuestionario educativo de 15 preguntas abiertas sobre "${input.topic}" del libro "${input.bookTitle}" para ${input.courseName}.${topicGuidance}
 
 ${courseContext ? `⚠️ IMPORTANTE: El estudiante tiene aproximadamente ${courseContext.approximateAge} años. Adapta las preguntas y respuestas a su nivel cognitivo.` : ''}
@@ -4604,7 +4792,10 @@ Respond in JSON format:
   ]
 }
 
-Respond ONLY with valid JSON.`);
+Respond ONLY with valid JSON.`;
+            };
+            
+            const userPrompt = getUserPrompt();
             
             const response = await openRouterClient.generateText(systemPrompt, userPrompt, {
               model: OPENROUTER_MODELS.GPT_4O_MINI,
@@ -4632,7 +4823,8 @@ Respond ONLY with valid JSON.`);
               
               parsed.questions.forEach((q: any, index: number) => {
                 formattedQuizHtml += `<p style="margin-bottom: 1em;"><strong>${index + 1}. ${q.questionText}</strong></p>`;
-                const answerLabel = isMath 
+                // Para matemáticas y ciencias con cálculos usar "Desarrollo y Respuesta"
+                const answerLabel = hasCalculations 
                   ? (isSpanish ? 'Desarrollo y Respuesta' : 'Solution and Answer')
                   : (isSpanish ? 'Respuesta esperada' : 'Expected answer');
                 formattedQuizHtml += `<p style="margin-top: 0.5em; margin-bottom: 0.5em;"><strong>${answerLabel}:</strong></p>`;
@@ -4660,13 +4852,13 @@ Respond ONLY with valid JSON.`);
       if (hasGoogleKey) {
         console.log('[generate-quiz] 🔄 Intentando con Google Gemini como fallback...');
         
-        // MATEMÁTICAS: Usar la IA con prompt especializado para problemas matemáticos
-        if (isMath) {
-          console.log('📐 [generate-quiz] Detectada asignatura de MATEMÁTICAS - Usando IA con prompt especializado para:', input.topic);
+        // MATEMÁTICAS y CIENCIAS CON CÁLCULOS: Usar la IA con prompt especializado
+        if (hasCalculations) {
+          console.log(`📐 [generate-quiz] Detectada asignatura con CÁLCULOS (${isMath ? 'Matemáticas' : scienceType}) - Usando IA con prompt especializado para:`, input.topic);
           
           try {
             const result = await generateQuizFlow({ ...input, _pdfContext: '', _pdfRefs: [] });
-            console.log('✅ [generate-quiz] Quiz de matemáticas generado con Google AI exitosamente');
+            console.log('✅ [generate-quiz] Quiz con cálculos generado con Google AI exitosamente');
             return result;
           } catch (mathErr) {
             console.warn('[generate-quiz] Error generando quiz de matemáticas con Google AI:', mathErr);

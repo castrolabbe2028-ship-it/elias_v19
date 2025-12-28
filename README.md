@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="public/logo.svg" alt="Smart Student Web" width="120" />
+  <img src="public/graduation-cap.svg" alt="Smart Student Web" width="120" />
 </p>
 
 <h1 align="center">🎓 SMART STUDENT WEB</h1>

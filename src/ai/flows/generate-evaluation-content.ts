@@ -608,7 +608,33 @@ export async function generateDynamicEvaluationContent(input: GenerateDynamicEva
     const isMathSubject = /matem|math|algebra|geometr|aritmet|calculo|trigonometr|ecuacion|numero|fraccion|decimal|porcentaje|division|multiplicacion|suma|resta/i.test(subjectLower) ||
                           /matem|math|algebra|geometr|aritmet|calculo|trigonometr|ecuacion|numero|fraccion|decimal|porcentaje|division|multiplicacion|suma|resta/i.test(topicLower);
     
-    console.log('🔢 Math subject detection:', { isMathSubject, subject: input.subject, topic: input.topic });
+    // Detectar asignaturas de ciencias con cálculos (Física, Química, Biología)
+    type ScienceType = 'fisica' | 'quimica' | 'biologia' | null;
+    const detectScienceType = (): ScienceType => {
+      const combined = subjectLower + ' ' + topicLower;
+      
+      // Detectar Física
+      if (/fisica|physics|cinematica|dinamica|mecanica|optica|termodinamica|electr|magneti|ondas|movimiento|fuerza|energia|trabajo|potencia|velocidad|aceleracion|newton|joule|watt/i.test(combined)) {
+        return 'fisica';
+      }
+      
+      // Detectar Química
+      if (/quimica|chemistry|atomo|molecula|elemento|compuesto|reaccion|estequiometria|mol|concentracion|solucion|acido|base|ph|enlace|tabla periodica|valencia|oxidacion|reduccion/i.test(combined)) {
+        return 'quimica';
+      }
+      
+      // Detectar Biología con cálculos
+      if (/biologia|biology|genetica|herencia|probabilidad genetica|adn|cromosoma|mitosis|meiosis|poblacion|ecosistema|cadena trofica|ciclo|metabolismo|fotosintesis|respiracion celular/i.test(combined)) {
+        return 'biologia';
+      }
+      
+      return null;
+    };
+    
+    const scienceType = detectScienceType();
+    const hasCalculations = isMathSubject || scienceType !== null;
+    
+    console.log('🔢 Math subject detection:', { isMathSubject, scienceType, subject: input.subject, topic: input.topic });
     
     // Si tenemos OpenRouter, generar preguntas reales con IA
     if (hasOpenRouter) {
@@ -751,10 +777,179 @@ Rules:
 
 Respond ONLY with JSON, no additional text.`;
 
-        // Seleccionar el prompt apropiado
-        const prompt = isMathSubject 
-          ? (isEs ? mathPromptEs : mathPromptEn)
-          : (isEs ? generalPromptEs : generalPromptEn);
+        // =====================================================================
+        // PROMPTS PARA CIENCIAS CON CÁLCULOS (FÍSICA, QUÍMICA, BIOLOGÍA)
+        // =====================================================================
+        
+        // FÍSICA
+        const physicsPromptEs = `Eres un profesor experto en FÍSICA. Genera una evaluación sobre el tema "${input.topic}" para el curso "${input.course || 'General'}".
+
+IMPORTANTE: Esta es una evaluación de FÍSICA que debe incluir tanto TEORÍA como PROBLEMAS CON CÁLCULOS.
+
+${input.pdfContent ? `Contenido del libro para adaptar:\n${input.pdfContent.substring(0, 2000)}` : ''}
+
+DISTRIBUCIÓN DE PREGUNTAS:
+- Aproximadamente 50% preguntas TEÓRICAS (conceptos, definiciones, leyes físicas)
+- Aproximadamente 50% preguntas con CÁLCULOS (problemas numéricos con fórmulas)
+
+Tipos de problemas de Física:
+- Cinemática (v = d/t, a = Δv/Δt, MRU, MRUV)
+- Dinámica (F = m×a, peso, fricción)
+- Energía y Trabajo (E = ½mv², W = F×d, P = W/t)
+- Conversiones de unidades (m/s a km/h, etc.)
+
+Genera exactamente ${count} preguntas en formato JSON:
+{
+  "evaluationTitle": "Evaluación de Física - ${input.topic}",
+  "questions": [
+    // ${tfCount} preguntas de V/F (mezcla teoría y resultados de cálculos):
+    {"id": "q1", "type": "TRUE_FALSE", "questionText": "Si un auto viaja a 20 m/s durante 5 segundos, recorre 100 metros", "correctAnswer": true, "explanation": "d = v×t = 20 m/s × 5 s = 100 m ✓"},
+    {"id": "q2", "type": "TRUE_FALSE", "questionText": "La fuerza se mide en kilogramos", "correctAnswer": false, "explanation": "La fuerza se mide en Newton (N), no en kg. El kg es unidad de masa."},
+    // ${mcCount} preguntas de selección múltiple (incluir problemas):
+    {"id": "q${tfCount + 1}", "type": "MULTIPLE_CHOICE", "questionText": "Un objeto de 10 kg cae libremente. ¿Cuál es la fuerza de gravedad sobre él? (g = 10 m/s²)", "options": ["100 N", "10 N", "1 N", "1000 N"], "correctAnswerIndex": 0, "explanation": "F = m×g = 10 kg × 10 m/s² = 100 N"},
+    // ${msCount} preguntas de selección múltiple (varias correctas):
+    {"id": "q${tfCount + mcCount + 1}", "type": "MULTIPLE_SELECTION", "questionText": "¿Cuáles son unidades de energía?", "options": ["Joule (J)", "Newton (N)", "Watt (W)", "Caloría (cal)"], "correctAnswerIndices": [0, 3], "explanation": "Joule y Caloría son unidades de energía. Newton es fuerza y Watt es potencia."}
+  ]
+}
+
+Responde SOLO con el JSON, sin texto adicional.`;
+
+        const physicsPromptEn = `You are an expert PHYSICS teacher. Generate an evaluation about "${input.topic}" for "${input.course || 'General'}" course.
+
+IMPORTANT: This is a PHYSICS evaluation that must include both THEORY and CALCULATION PROBLEMS.
+
+${input.pdfContent ? `Book content to adapt:\n${input.pdfContent.substring(0, 2000)}` : ''}
+
+QUESTION DISTRIBUTION:
+- Approximately 50% THEORETICAL questions (concepts, definitions, physical laws)
+- Approximately 50% CALCULATION questions (numerical problems with formulas)
+
+Types of Physics problems:
+- Kinematics (v = d/t, a = Δv/Δt, uniform motion)
+- Dynamics (F = m×a, weight, friction)
+- Energy and Work (E = ½mv², W = F×d, P = W/t)
+- Unit conversions (m/s to km/h, etc.)
+
+Generate exactly ${count} questions in JSON format:
+{
+  "evaluationTitle": "Physics Evaluation - ${input.topic}",
+  "questions": [...]
+}
+
+Respond ONLY with JSON, no additional text.`;
+
+        // QUÍMICA
+        const chemistryPromptEs = `Eres un profesor experto en QUÍMICA. Genera una evaluación sobre el tema "${input.topic}" para el curso "${input.course || 'General'}".
+
+IMPORTANTE: Esta es una evaluación de QUÍMICA que debe incluir tanto TEORÍA como PROBLEMAS CON CÁLCULOS.
+
+${input.pdfContent ? `Contenido del libro para adaptar:\n${input.pdfContent.substring(0, 2000)}` : ''}
+
+DISTRIBUCIÓN DE PREGUNTAS:
+- Aproximadamente 50% preguntas TEÓRICAS (conceptos, nomenclatura, propiedades)
+- Aproximadamente 50% preguntas con CÁLCULOS (estequiometría, concentraciones, pH)
+
+Tipos de problemas de Química:
+- Estequiometría (moles, masa molar, conversiones)
+- Balanceo de ecuaciones químicas
+- Concentración de soluciones (Molaridad = mol/L)
+- Cálculos de pH (pH = -log[H+])
+- Rendimiento de reacciones
+
+Genera exactamente ${count} preguntas en formato JSON:
+{
+  "evaluationTitle": "Evaluación de Química - ${input.topic}",
+  "questions": [
+    // ${tfCount} preguntas de V/F:
+    {"id": "q1", "type": "TRUE_FALSE", "questionText": "El número de Avogadro es 6.022 × 10²³", "correctAnswer": true, "explanation": "El número de Avogadro (NA) = 6.022 × 10²³ partículas/mol"},
+    {"id": "q2", "type": "TRUE_FALSE", "questionText": "Una solución con pH 3 es básica", "correctAnswer": false, "explanation": "pH < 7 indica solución ácida. pH 3 es ácido."},
+    // ${mcCount} preguntas de selección múltiple:
+    {"id": "q${tfCount + 1}", "type": "MULTIPLE_CHOICE", "questionText": "¿Cuántos moles hay en 44g de CO₂? (M = 44 g/mol)", "options": ["1 mol", "2 mol", "0.5 mol", "44 mol"], "correctAnswerIndex": 0, "explanation": "n = m/M = 44g ÷ 44g/mol = 1 mol"},
+    // ${msCount} preguntas de selección múltiple (varias correctas):
+    {"id": "q${tfCount + mcCount + 1}", "type": "MULTIPLE_SELECTION", "questionText": "¿Cuáles son unidades de concentración?", "options": ["Molar (M)", "Gramos/Litro (g/L)", "Kelvin (K)", "% masa/volumen"], "correctAnswerIndices": [0, 1, 3], "explanation": "Molar, g/L y % son unidades de concentración. Kelvin es temperatura."}
+  ]
+}
+
+Responde SOLO con el JSON, sin texto adicional.`;
+
+        const chemistryPromptEn = `You are an expert CHEMISTRY teacher. Generate an evaluation about "${input.topic}" for "${input.course || 'General'}" course.
+
+IMPORTANT: This is a CHEMISTRY evaluation that must include both THEORY and CALCULATION PROBLEMS.
+
+${input.pdfContent ? `Book content to adapt:\n${input.pdfContent.substring(0, 2000)}` : ''}
+
+QUESTION DISTRIBUTION:
+- Approximately 50% THEORETICAL questions (concepts, nomenclature, properties)
+- Approximately 50% CALCULATION questions (stoichiometry, concentrations, pH)
+
+Generate exactly ${count} questions in JSON format with similar structure to the Spanish example.
+
+Respond ONLY with JSON, no additional text.`;
+
+        // BIOLOGÍA
+        const biologyPromptEs = `Eres un profesor experto en BIOLOGÍA. Genera una evaluación sobre el tema "${input.topic}" para el curso "${input.course || 'General'}".
+
+IMPORTANTE: Esta es una evaluación de BIOLOGÍA que debe incluir TEORÍA y PROBLEMAS de probabilidad genética cuando corresponda.
+
+${input.pdfContent ? `Contenido del libro para adaptar:\n${input.pdfContent.substring(0, 2000)}` : ''}
+
+DISTRIBUCIÓN DE PREGUNTAS:
+- Aproximadamente 70% preguntas TEÓRICAS (conceptos, procesos, estructuras)
+- Aproximadamente 30% preguntas con CÁLCULOS (genética, probabilidades, proporciones)
+
+Tipos de problemas de Biología:
+- Cruces genéticos (cuadros de Punnett)
+- Proporciones fenotípicas y genotípicas
+- Probabilidad en herencia (monohíbridos, dihíbridos)
+- Cálculos de frecuencias alélicas
+
+Genera exactamente ${count} preguntas en formato JSON:
+{
+  "evaluationTitle": "Evaluación de Biología - ${input.topic}",
+  "questions": [
+    // ${tfCount} preguntas de V/F:
+    {"id": "q1", "type": "TRUE_FALSE", "questionText": "En un cruce Aa × Aa, la proporción esperada de homocigotos dominantes es 25%", "correctAnswer": true, "explanation": "En cruce Aa × Aa: AA=25%, Aa=50%, aa=25%. Los homocigotos dominantes (AA) son 25%."},
+    // ${mcCount} preguntas de selección múltiple:
+    {"id": "q${tfCount + 1}", "type": "MULTIPLE_CHOICE", "questionText": "Si se cruzan dos individuos heterocigotos (Aa × Aa), ¿cuántos de 16 descendientes se esperan con fenotipo recesivo?", "options": ["4 individuos", "8 individuos", "12 individuos", "16 individuos"], "correctAnswerIndex": 0, "explanation": "aa = 25% de 16 = 4 individuos"},
+    // ${msCount} preguntas de selección múltiple (varias correctas):
+    {"id": "q${tfCount + mcCount + 1}", "type": "MULTIPLE_SELECTION", "questionText": "¿Cuáles son componentes del ADN?", "options": ["Adenina", "Ribosa", "Timina", "Desoxirribosa"], "correctAnswerIndices": [0, 2, 3], "explanation": "El ADN contiene adenina, timina (no uracilo) y desoxirribosa (no ribosa)."}
+  ]
+}
+
+Responde SOLO con el JSON, sin texto adicional.`;
+
+        const biologyPromptEn = `You are an expert BIOLOGY teacher. Generate an evaluation about "${input.topic}" for "${input.course || 'General'}" course.
+
+IMPORTANT: This is a BIOLOGY evaluation that must include THEORY and genetic probability PROBLEMS when applicable.
+
+${input.pdfContent ? `Book content to adapt:\n${input.pdfContent.substring(0, 2000)}` : ''}
+
+QUESTION DISTRIBUTION:
+- Approximately 70% THEORETICAL questions (concepts, processes, structures)
+- Approximately 30% CALCULATION questions (genetics, probabilities, ratios)
+
+Generate exactly ${count} questions in JSON format with similar structure to the Spanish example.
+
+Respond ONLY with JSON, no additional text.`;
+
+        // Seleccionar el prompt apropiado según el tipo de asignatura
+        const getPrompt = (): string => {
+          if (isMathSubject) {
+            return isEs ? mathPromptEs : mathPromptEn;
+          }
+          if (scienceType === 'fisica') {
+            return isEs ? physicsPromptEs : physicsPromptEn;
+          }
+          if (scienceType === 'quimica') {
+            return isEs ? chemistryPromptEs : chemistryPromptEn;
+          }
+          if (scienceType === 'biologia') {
+            return isEs ? biologyPromptEs : biologyPromptEn;
+          }
+          return isEs ? generalPromptEs : generalPromptEn;
+        };
+        
+        const prompt = getPrompt();
 
         const aiResponse = await generateWithAI(prompt, {
           temperature: 0.7,

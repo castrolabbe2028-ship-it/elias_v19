@@ -15,6 +15,109 @@ import {z} from 'genkit';
 import { getOpenRouterClient, hasOpenRouterApiKey, OPENROUTER_MODELS } from '@/lib/openrouter-client';
 import { getContentGenerationContext, generateAIPromptInstructions } from '@/lib/topic-descriptions';
 
+// =============================================================================
+// DETECTAR ASIGNATURAS CON CÁLCULOS (MATEMÁTICAS, FÍSICA, QUÍMICA, BIOLOGÍA)
+// =============================================================================
+type SubjectWithCalculations = 'matematicas' | 'fisica' | 'quimica' | 'biologia' | null;
+
+function detectSubjectWithCalculations(bookTitle: string, topic: string): SubjectWithCalculations {
+  const normalizedTitle = bookTitle.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  const normalizedTopic = topic.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  const combined = normalizedTitle + ' ' + normalizedTopic;
+  
+  // Detectar Matemáticas
+  if (/matem|math|algebra|geometr|aritmet|calculo|trigonometr|ecuacion|numero|fraccion|decimal|porcentaje|division|multiplicacion|suma|resta|raiz|potencia/i.test(combined)) {
+    return 'matematicas';
+  }
+  
+  // Detectar Física
+  if (/fisica|physics|cinematica|dinamica|mecanica|optica|termodinamica|electr|magneti|ondas|movimiento|fuerza|energia|trabajo|potencia|velocidad|aceleracion|newton|joule|watt/i.test(combined)) {
+    return 'fisica';
+  }
+  
+  // Detectar Química
+  if (/quimica|chemistry|atomo|molecula|elemento|compuesto|reaccion|estequiometria|mol|concentracion|solucion|acido|base|ph|enlace|tabla periodica|valencia|oxidacion|reduccion/i.test(combined)) {
+    return 'quimica';
+  }
+  
+  // Detectar Biología con cálculos
+  if (/biologia|biology|genetica|herencia|adn|cromosoma|mitosis|meiosis|poblacion|ecosistema|cadena trofica|metabolismo|fotosintesis|respiracion celular/i.test(combined)) {
+    return 'biologia';
+  }
+  
+  return null;
+}
+
+// Instrucciones adicionales para asignaturas con cálculos
+function getCalculationInstructions(subjectType: SubjectWithCalculations, language: 'es' | 'en'): string {
+  if (!subjectType) return '';
+  
+  const instructions: Record<SubjectWithCalculations, { es: string; en: string }> = {
+    matematicas: {
+      es: `
+📐 INSTRUCCIONES ESPECIALES PARA MATEMÁTICAS:
+- Incluye FÓRMULAS Y ECUACIONES relevantes
+- Agrega EJEMPLOS RESUELTOS paso a paso
+- Muestra el DESARROLLO de los ejercicios
+- Incluye una sección "### Ejercicios Resueltos" con 3-5 problemas con sus soluciones completas`,
+      en: `
+📐 SPECIAL INSTRUCTIONS FOR MATHEMATICS:
+- Include relevant FORMULAS AND EQUATIONS
+- Add SOLVED EXAMPLES step by step
+- Show the DEVELOPMENT of exercises
+- Include a "### Solved Exercises" section with 3-5 problems with complete solutions`
+    },
+    fisica: {
+      es: `
+⚡ INSTRUCCIONES ESPECIALES PARA FÍSICA:
+- Incluye FÓRMULAS relevantes (v=d/t, F=ma, E=mc², etc.)
+- Agrega EJEMPLOS RESUELTOS con desarrollo paso a paso
+- Muestra DIAGRAMAS conceptuales cuando sea posible
+- Incluye UNIDADES de medida (m, kg, N, J, W, etc.)
+- Agrega una sección "### Problemas Resueltos" con 3-4 ejercicios prácticos`,
+      en: `
+⚡ SPECIAL INSTRUCTIONS FOR PHYSICS:
+- Include relevant FORMULAS (v=d/t, F=ma, E=mc², etc.)
+- Add SOLVED EXAMPLES with step-by-step development
+- Show conceptual DIAGRAMS when possible
+- Include UNITS of measurement (m, kg, N, J, W, etc.)
+- Add a "### Solved Problems" section with 3-4 practical exercises`
+    },
+    quimica: {
+      es: `
+🧪 INSTRUCCIONES ESPECIALES PARA QUÍMICA:
+- Incluye FÓRMULAS químicas y ecuaciones (H₂O, CO₂, etc.)
+- Agrega CÁLCULOS de estequiometría cuando corresponda
+- Muestra BALANCEO de ecuaciones químicas
+- Incluye unidades (mol, g/mol, M, pH)
+- Agrega una sección "### Ejercicios Resueltos" con cálculos químicos`,
+      en: `
+🧪 SPECIAL INSTRUCTIONS FOR CHEMISTRY:
+- Include CHEMICAL FORMULAS and equations (H₂O, CO₂, etc.)
+- Add STOICHIOMETRY calculations when applicable
+- Show BALANCING of chemical equations
+- Include units (mol, g/mol, M, pH)
+- Add a "### Solved Exercises" section with chemical calculations`
+    },
+    biologia: {
+      es: `
+🧬 INSTRUCCIONES ESPECIALES PARA BIOLOGÍA:
+- Cuando sea sobre genética, incluye CRUCES GENÉTICOS (cuadros de Punnett)
+- Muestra PROBABILIDADES en herencia
+- Incluye PROPORCIONES fenotípicas y genotípicas
+- Agrega ejemplos prácticos de cálculos biológicos cuando corresponda`,
+      en: `
+🧬 SPECIAL INSTRUCTIONS FOR BIOLOGY:
+- When about genetics, include GENETIC CROSSES (Punnett squares)
+- Show PROBABILITIES in inheritance
+- Include PHENOTYPIC and GENOTYPIC RATIOS
+- Add practical examples of biological calculations when applicable`
+    }
+  };
+  
+  return instructions[subjectType]?.[language] || '';
+}
+
 const GenerateSummaryInputSchema = z.object({
   bookTitle: z.string().describe('The title of the book to summarize from.'),
   topic: z.string().describe('The specific topic to summarize. This helps focus the summary.'),
@@ -55,6 +158,12 @@ async function generateWithOpenRouter(input: GenerateSummaryInput): Promise<Gene
   const courseContext = input.course ? getContentGenerationContext(input.course) : null;
   const adaptationInstructions = courseContext ? generateAIPromptInstructions(courseContext, input.language) : '';
   
+  // Detectar si es asignatura con cálculos
+  const subjectType = detectSubjectWithCalculations(input.bookTitle, input.topic);
+  const calculationInstructions = getCalculationInstructions(subjectType, isSpanish ? 'es' : 'en');
+  
+  console.log('[generate-summary] Subject type detected:', subjectType || 'general');
+  
   const systemPrompt = isSpanish 
     ? `Eres un experto educador y creador de contenido pedagógico especializado en el currículo escolar chileno. Tu tarea es crear resúmenes educativos de alta calidad en español, ADAPTADOS AL NIVEL DEL ESTUDIANTE.
 
@@ -66,6 +175,7 @@ IMPORTANTE:
 - Usa formato Markdown con ## para títulos y ### para subtítulos
 - Usa **negrita** para términos importantes
 - Incluye ejemplos del mundo real apropiados para la edad del estudiante
+${calculationInstructions}
 
 ${adaptationInstructions}`
     : `You are an expert educator and pedagogical content creator specialized in the Chilean school curriculum. Your task is to create high-quality educational summaries in English, ADAPTED TO THE STUDENT'S LEVEL.
@@ -78,6 +188,7 @@ IMPORTANT:
 - Use Markdown format with ## for titles and ### for subtitles
 - Use **bold** for important terms
 - Include real-world examples appropriate for the student's age
+${calculationInstructions}
 
 ${adaptationInstructions}`;
 
