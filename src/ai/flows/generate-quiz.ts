@@ -4383,7 +4383,13 @@ function buildFallbackQuizHtml(input: GenerateQuizInput, _pdfContext: string): s
   formattedQuizHtml += `<br /><br />`;
 
   selectedQuestions.forEach((item, index) => {
-    formattedQuizHtml += `<p style="margin-bottom: 1em;"><strong>${index + 1}. ${item.q}</strong></p>`;
+    // Limpiar el texto de la pregunta para formato uniforme
+    let cleanQuestion = String(item.q || '').trim();
+    // Remueve números al inicio como "1. " o "1) "
+    cleanQuestion = cleanQuestion.replace(/^[\d]+[\.\)]\s*/, '');
+    // Remueve emojis y palabras como "🔢 Problema 1: " o "Pregunta 1:"
+    cleanQuestion = cleanQuestion.replace(/^[^\w\s]*\s*(Pregunta|Problema|Question|Problem)\s*[\d]*[:\.\)]*\s*/i, '');
+    formattedQuizHtml += `<p style="margin-bottom: 1em;"><strong>${index + 1}. ${cleanQuestion}</strong></p>`;
     // Para matemáticas usar "Desarrollo y Respuesta", para otros "Respuesta esperada"
     const answerLabel = isMath 
       ? (isSpanish ? 'Desarrollo y Respuesta' : 'Solution and Answer')
@@ -4650,8 +4656,14 @@ ${adaptationInstructions}`;
 
 ${courseContext ? `⚠️ IMPORTANTE: El estudiante tiene aproximadamente ${courseContext.approximateAge} años. Adapta la dificultad de los problemas a su nivel.` : ''}
 
+FORMATO OBLIGATORIO para questionText:
+- Cada pregunta DEBE empezar con el número seguido de punto y espacio: "1. ", "2. ", etc.
+- NO uses emojis al inicio del texto de la pregunta
+- Ejemplo correcto: "1. Calcula el resultado de 25 × 4"
+- Ejemplo INCORRECTO: "🔢 Problema 1: Calcula..."
+
 Cada problema debe tener:
-1. Un enunciado claro (questionText) con emojis como 🔢, ➕, ➖, ✖️, ➗
+1. Un enunciado claro siguiendo el formato "N. Pregunta"
 2. Una respuesta detallada (expectedAnswer) con:
    - 📝 DESARROLLO: paso a paso
    - ✅ RESPUESTA: resultado final
@@ -4661,7 +4673,7 @@ Responde en JSON con formato:
 {
   "quizTitle": "${titlePrefix} - ${topicUpper}",
   "questions": [
-    {"questionText": "🔢 Problema 1: ...", "expectedAnswer": "📝 DESARROLLO:\\n...\\n✅ RESPUESTA: ..."}
+    {"questionText": "1. Calcula el resultado de...", "expectedAnswer": "📝 DESARROLLO:\\n...\\n✅ RESPUESTA: ..."}
   ]
 }
 
@@ -4670,15 +4682,21 @@ Responde SOLO con JSON válido.`
 
 ${courseContext ? `⚠️ IMPORTANT: The student is approximately ${courseContext.approximateAge} years old. Adapt the difficulty of the problems to their level.` : ''}
 
+MANDATORY FORMAT for questionText:
+- Each question MUST start with the number followed by period and space: "1. ", "2. ", etc.
+- DO NOT use emojis at the beginning of the question text
+- Correct example: "1. Calculate the result of 25 × 4"
+- INCORRECT example: "🔢 Problem 1: Calculate..."
+
 Each problem must have:
-1. A clear statement (questionText) with emojis like 🔢, ➕, ➖, ✖️, ➗
+1. A clear statement following the format "N. Question"
 2. A detailed answer (expectedAnswer) with step-by-step solution
 
 Respond in JSON format:
 {
   "quizTitle": "${titlePrefix} - ${topicUpper}",
   "questions": [
-    {"questionText": "🔢 Problem 1: ...", "expectedAnswer": "📝 SOLUTION:\\n...\\n✅ ANSWER: ..."}
+    {"questionText": "1. Calculate the result of...", "expectedAnswer": "📝 SOLUTION:\\n...\\n✅ ANSWER: ..."}
   ]
 }
 
@@ -4687,7 +4705,6 @@ Respond ONLY with valid JSON.`;
               
               // Para Física, Química, Biología (ciencias con cálculos)
               if (scienceType) {
-                const subjectEmoji = scienceType === 'fisica' ? '⚡' : scienceType === 'quimica' ? '🧪' : '🧬';
                 return isSpanish 
                   ? `Genera un cuestionario de 15 preguntas sobre "${input.topic}" para ${input.courseName}.${topicGuidance}
 
@@ -4695,28 +4712,27 @@ ${scienceInstructions}
 
 ${courseContext ? `⚠️ IMPORTANTE: El estudiante tiene aproximadamente ${courseContext.approximateAge} años. Adapta la dificultad al nivel del estudiante.` : ''}
 
+FORMATO OBLIGATORIO para questionText:
+- Cada pregunta DEBE empezar con el número seguido de punto y espacio: "1. ", "2. ", etc.
+- NO uses emojis al inicio del texto de la pregunta
+- Ejemplo correcto: "1. ¿Cuál es la fórmula para calcular la velocidad?"
+- Ejemplo INCORRECTO: "⚡ Pregunta 1: ¿Cuál es..."
+
 DISTRIBUCIÓN DE PREGUNTAS:
 - 8 preguntas TEÓRICAS (conceptos, definiciones, explicaciones)
 - 7 preguntas PRÁCTICAS (problemas con cálculos, aplicación de fórmulas)
 
-Para preguntas TEÓRICAS:
-- Usar emojis como 📚, 🔬, 💡
-- Respuestas explicativas y conceptuales
-
-Para preguntas PRÁCTICAS/CÁLCULOS:
-- Usar emojis como ${subjectEmoji}, 🔢, 📊
-- Incluir en la respuesta:
+Para las RESPUESTAS de preguntas prácticas/cálculos incluir:
   📝 DATOS: identificación de variables
   📐 FÓRMULA: ecuación a usar
   🔄 DESARROLLO: paso a paso
   ✅ RESPUESTA: resultado con unidades
-  🔍 VERIFICACIÓN: comprobación
 
 Responde en JSON con formato:
 {
   "quizTitle": "${titlePrefix} - ${topicUpper}",
   "questions": [
-    {"questionText": "${subjectEmoji} Pregunta/Problema 1: ...", "expectedAnswer": "Respuesta detallada..."}
+    {"questionText": "1. ¿Pregunta sobre el tema?", "expectedAnswer": "Respuesta detallada..."}
   ]
 }
 
@@ -4727,28 +4743,27 @@ ${scienceInstructions}
 
 ${courseContext ? `⚠️ IMPORTANT: The student is approximately ${courseContext.approximateAge} years old. Adapt difficulty to the student's level.` : ''}
 
+MANDATORY FORMAT for questionText:
+- Each question MUST start with the number followed by period and space: "1. ", "2. ", etc.
+- DO NOT use emojis at the beginning of the question text
+- Correct example: "1. What is the formula to calculate velocity?"
+- INCORRECT example: "⚡ Question 1: What is..."
+
 QUESTION DISTRIBUTION:
 - 8 THEORETICAL questions (concepts, definitions, explanations)
 - 7 PRACTICAL questions (problems with calculations, formula application)
 
-For THEORETICAL questions:
-- Use emojis like 📚, 🔬, 💡
-- Explanatory and conceptual answers
-
-For PRACTICAL/CALCULATION questions:
-- Use emojis like ${subjectEmoji}, 🔢, 📊
-- Include in the answer:
+For ANSWERS to practical/calculation questions include:
   📝 DATA: variable identification
   📐 FORMULA: equation to use
   🔄 SOLUTION: step by step
   ✅ ANSWER: result with units
-  🔍 VERIFICATION: check
 
 Respond in JSON format:
 {
   "quizTitle": "${titlePrefix} - ${topicUpper}",
   "questions": [
-    {"questionText": "${subjectEmoji} Question/Problem 1: ...", "expectedAnswer": "Detailed answer..."}
+    {"questionText": "1. Question about the topic?", "expectedAnswer": "Detailed answer..."}
   ]
 }
 
@@ -4760,6 +4775,10 @@ Respond ONLY with valid JSON.`;
               ? `Genera un cuestionario educativo de 15 preguntas abiertas sobre "${input.topic}" del libro "${input.bookTitle}" para ${input.courseName}.${topicGuidance}
 
 ${courseContext ? `⚠️ IMPORTANTE: El estudiante tiene aproximadamente ${courseContext.approximateAge} años. Adapta las preguntas y respuestas a su nivel cognitivo.` : ''}
+
+FORMATO OBLIGATORIO para questionText:
+- Cada pregunta DEBE empezar con el número seguido de punto y espacio: "1. ", "2. ", etc.
+- NO uses emojis al inicio del texto de la pregunta
 
 Cada pregunta debe:
 1. Ser clara y específica sobre el tema
@@ -4822,7 +4841,13 @@ Respond ONLY with valid JSON.`;
               formattedQuizHtml += `<br /><br />`;
               
               parsed.questions.forEach((q: any, index: number) => {
-                formattedQuizHtml += `<p style="margin-bottom: 1em;"><strong>${index + 1}. ${q.questionText}</strong></p>`;
+                // Limpiar el texto de la pregunta removiendo números/emojis iniciales para evitar duplicados
+                let cleanQuestion = String(q.questionText || '').trim();
+                // Remover patrones como "1. ", "1) ", "🔢 Problema 1: ", "⚡ Pregunta 1: ", etc.
+                cleanQuestion = cleanQuestion.replace(/^[\d]+[\.\)]\s*/, ''); // Remueve "1. " o "1) "
+                cleanQuestion = cleanQuestion.replace(/^[^\w\s]*\s*(Pregunta|Problema|Question|Problem)\s*[\d]*[:\.\)]*\s*/i, ''); // Remueve "🔢 Problema 1: "
+                
+                formattedQuizHtml += `<p style="margin-bottom: 1em;"><strong>${index + 1}. ${cleanQuestion}</strong></p>`;
                 // Para matemáticas y ciencias con cálculos usar "Desarrollo y Respuesta"
                 const answerLabel = hasCalculations 
                   ? (isSpanish ? 'Desarrollo y Respuesta' : 'Solution and Answer')
@@ -5002,8 +5027,11 @@ NIVEL: Adapta la dificultad al curso "{{courseName}}":
 ESTRUCTURA REQUERIDA:
 1. **Título**: "PROBLEMAS DE MATEMÁTICAS - {{topic_uppercase}}"
 2. **Cantidad**: Exactamente 15 problemas únicos
-3. **Formato**:
-   - questionText: El enunciado del problema matemático (puede incluir emojis como 🔢, ➗, ✖️, ➕, ➖)
+3. **Formato OBLIGATORIO**:
+   - questionText: DEBE empezar con el número y punto "1. ", "2. ", etc., seguido del enunciado del problema
+   - NO incluir emojis al inicio de questionText
+   - Ejemplo correcto: "1. Calcula el resultado de 25 × 4"
+   - Ejemplo INCORRECTO: "🔢 Problema 1: Calcula..."
    - expectedAnswer: El desarrollo COMPLETO paso a paso usando el formato indicado arriba
 
 Genera problemas variados y progresivos en dificultad. Todo el contenido debe estar en español.
@@ -5111,7 +5139,13 @@ const generateQuizFlow = ai.defineFlow(
     formattedQuizHtml += `<br /><br />`;
     
     output.questions.forEach((q, index) => {
-      formattedQuizHtml += `<p style="margin-bottom: 1em;"><strong>${index + 1}. ${q.questionText}</strong></p>`;
+      // Limpiar el texto de la pregunta para formato uniforme
+      let cleanQuestion = String(q.questionText || '').trim();
+      // Remueve números al inicio como "1. " o "1) "
+      cleanQuestion = cleanQuestion.replace(/^[\d]+[\.\)]\s*/, '');
+      // Remueve emojis y palabras como "🔢 Problema 1: " o "Pregunta 1:"
+      cleanQuestion = cleanQuestion.replace(/^[^\w\s]*\s*(Pregunta|Problema|Question|Problem)\s*[\d]*[:\.\)]*\s*/i, '');
+      formattedQuizHtml += `<p style="margin-bottom: 1em;"><strong>${index + 1}. ${cleanQuestion}</strong></p>`;
       // Para matemáticas usar "Desarrollo y Respuesta", para otros "Respuesta esperada"
       const answerLabel = isMath 
         ? (isSpanish ? 'Desarrollo y Respuesta' : 'Solution and Answer')
