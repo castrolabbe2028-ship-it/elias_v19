@@ -8808,13 +8808,12 @@ export default function TeacherStatisticsPage() {
     return () => { mounted = false; window.removeEventListener('sqlGradesUpdated', onSQL as any); };
   }, [isSQLConnected, getGradesByYear, comparisonType, periodYear, selectedYear, sqlGradesByYear]);
 
-  // Sincronizar periodYear con selectedYear cuando se inicializa el componente
-  // NOTA: Comentado para mantener periodYear independiente por defecto
-  // useEffect(() => {
-  //   if (periodYear !== selectedYear) {
-  //     setPeriodYear(selectedYear);
-  //   }
-  // }, [selectedYear]); // Solo escuchar cambios en selectedYear
+  // Sincronizar periodYear con selectedYear cuando cambia el filtro principal
+  useEffect(() => {
+    if (periodYear !== selectedYear) {
+      setPeriodYear(selectedYear);
+    }
+  }, [selectedYear]); // Solo escuchar cambios en selectedYear
 
   // Años disponibles (tienen al menos 1 curso y 1 sección) - Optimizado con cache
   const availableYears = useMemo(() => {
