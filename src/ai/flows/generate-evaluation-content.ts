@@ -1011,6 +1011,96 @@ Respond ONLY with JSON, no additional text.`;
     const makeId = (i: number) => `q${i + 1}_${timestamp}_${randomSeed}`;
     const contextLabel = isEs ? `${input.subject ? input.subject + ' - ' : ''}${input.bookTitle}` : `${input.subject ? input.subject + ' - ' : ''}${input.bookTitle}`;
 
+    // Función de traducción para preguntas matemáticas
+    const translateMathQuestion = (text: string): string => {
+      if (isEs) return text;
+      return text
+        .replace(/El resultado de/g, 'The result of')
+        .replace(/es igual a/g, 'equals')
+        .replace(/entonces/g, 'then')
+        .replace(/La mitad de/g, 'Half of')
+        .replace(/El doble de/g, 'Double of')
+        .replace(/El triple de/g, 'Triple of')
+        .replace(/El cuadrado de/g, 'The square of')
+        .replace(/El cubo de/g, 'The cube of')
+        .replace(/La raíz cuadrada de/g, 'The square root of')
+        .replace(/Las fracciones/g, 'The fractions')
+        .replace(/son equivalentes/g, 'are equivalent')
+        .replace(/Si /g, 'If ')
+        .replace(/ y /g, ' and ')
+        .replace(/ más /g, ' plus ')
+        .replace(/ menos /g, ' minus ')
+        .replace(/ por /g, ' times ')
+        .replace(/ entre /g, ' divided by ')
+        .replace(/¿Cuál es/g, 'What is')
+        .replace(/¿Cuánto es/g, 'What is')
+        .replace(/¿Cuántos/g, 'How many')
+        .replace(/¿Cuántas/g, 'How many')
+        .replace(/tiene/g, 'has')
+        .replace(/tenía/g, 'had')
+        .replace(/quedan/g, 'remain')
+        .replace(/quedaron/g, 'remained')
+        .replace(/caramelos/g, 'candies')
+        .replace(/estampillas/g, 'stamps')
+        .replace(/figuritas/g, 'stickers')
+        .replace(/pasajeros/g, 'passengers')
+        .replace(/alumnos/g, 'students')
+        .replace(/páginas/g, 'pages')
+        .replace(/productos/g, 'products')
+        .replace(/vacas/g, 'cows')
+        .replace(/manzanas/g, 'apples')
+        .replace(/amigos/g, 'friends')
+        .replace(/pizzas?/g, 'pizza')
+        .replace(/litros?/g, 'liters')
+        .replace(/dinero/g, 'money')
+        .replace(/jugo/g, 'juice')
+        .replace(/pastel/g, 'cake')
+        .replace(/descuento/g, 'discount')
+        .replace(/precio/g, 'price')
+        .replace(/artículo/g, 'item')
+        .replace(/tienda/g, 'store')
+        .replace(/granja/g, 'farm')
+        .replace(/tren/g, 'train')
+        .replace(/autobús/g, 'bus')
+        .replace(/escuela/g, 'school')
+        .replace(/clase/g, 'class')
+        .replace(/María/g, 'Maria')
+        .replace(/Juan/g, 'John')
+        .replace(/Pedro/g, 'Peter')
+        .replace(/Ana/g, 'Anna')
+        .replace(/Carlos/g, 'Charles')
+        .replace(/Resuelve:/g, 'Solve:')
+        .replace(/el lunes/g, 'on Monday')
+        .replace(/el martes/g, 'on Tuesday')
+        .replace(/en total/g, 'in total')
+        .replace(/le quedan/g, 'are left')
+        .replace(/le tocan/g, 'gets')
+        .replace(/subieron/g, 'got on')
+        .replace(/bajaron/g, 'got off')
+        .replace(/regaló/g, 'gave away')
+        .replace(/ganó/g, 'earned')
+        .replace(/gastó/g, 'spent')
+        .replace(/ahorras/g, 'save')
+        .replace(/comieron/g, 'ate')
+        .replace(/comió/g, 'ate')
+        .replace(/repartir/g, 'share')
+        .replace(/partes iguales/g, 'equal parts');
+    };
+
+    const translateMathExplanation = (text: string): string => {
+      if (isEs) return text;
+      return text
+        .replace(/La suma es correcta/g, 'The addition is correct')
+        .replace(/La multiplicación es correcta/g, 'The multiplication is correct')
+        .replace(/La división es correcta/g, 'The division is correct')
+        .replace(/La resta es correcta/g, 'The subtraction is correct')
+        .replace(/es correcto/g, 'is correct')
+        .replace(/es correcta/g, 'is correct')
+        .replace(/no/g, 'not')
+        .replace(/entonces/g, 'then')
+        .replace(/por lo tanto/g, 'therefore')
+        .replace(/porque/g, 'because');
+
     // Distribución aproximada en tercios
     const tfCount = Math.round(count / 3);
     const mcCount = Math.round((count - tfCount) / 2);
@@ -1379,9 +1469,9 @@ Respond ONLY with JSON, no additional text.`;
           }
           
           const problem = selectedProblems[index % selectedProblems.length];
-          question = isEs ? problem.q : problem.q.replace('El resultado de', 'The result of').replace('es igual a', 'equals').replace('entonces', 'then').replace('La mitad de', 'Half of').replace('El doble de', 'Double of').replace('El triple de', 'Triple of').replace('El cuadrado de', 'The square of').replace('El cubo de', 'The cube of').replace('La raíz cuadrada de', 'The square root of').replace('Las fracciones', 'The fractions').replace('son equivalentes', 'are equivalent');
+          question = translateMathQuestion(problem.q);
           answer = problem.a;
-          explanation = isEs ? problem.e : problem.e.replace('La suma es correcta', 'The addition is correct').replace('La multiplicación es correcta', 'The multiplication is correct').replace('La división es correcta', 'The division is correct').replace('La resta es correcta', 'The subtraction is correct');
+          explanation = translateMathExplanation(problem.e);
         } else if (topicLowerFallback.includes('respiratorio')) {
           if (isTrue) {
             question = isEs ? 'Los pulmones son los órganos principales del sistema respiratorio.' : 'The lungs are the main organs of the respiratory system.';
@@ -1785,8 +1875,8 @@ Respond ONLY with JSON, no additional text.`;
           }
           
           const problem = selectedProblems[index % selectedProblems.length];
-          questionText = isEs ? problem.q : problem.q;
-          options = problem.opts;
+          questionText = translateMathQuestion(problem.q);
+          options = isEs ? problem.opts : problem.opts.map((opt: string) => translateMathQuestion(opt));
           
           return {
             id: makeId(questions.length),
@@ -1794,7 +1884,7 @@ Respond ONLY with JSON, no additional text.`;
             questionText,
             options,
             correctAnswerIndex: problem.correct,
-            explanation: isEs ? problem.e : problem.e
+            explanation: translateMathExplanation(problem.e)
           };
         }
         
@@ -2148,9 +2238,9 @@ Respond ONLY with JSON, no additional text.`;
           }
           
           const problem = selectedProblems[index % selectedProblems.length];
-          options = problem.opts;
-          questionText = isEs ? problem.q : problem.q;
-          explanation = isEs ? problem.e : problem.e;
+          options = isEs ? problem.opts : problem.opts.map((opt: string) => translateMathQuestion(opt));
+          questionText = translateMathQuestion(problem.q);
+          explanation = translateMathExplanation(problem.e);
           
           return {
             id: makeId(questions.length),
