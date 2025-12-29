@@ -830,12 +830,12 @@ function GradesOverTimeChart({ monthlyPctByKey, semester, comparisonType, displa
     };
     const levelOfCourse = (c:any): 'basica'|'media'|undefined => {
       const lv = (c?.level||'').toString().toLowerCase();
-      if (/basica|basico|basic/.test(lv)) return 'basica';
+      if (/basica|basico|basic|bsica|bsico/.test(lv)) return 'basica';
       if (/media|medio|secundaria|secondary|high/.test(lv)) return 'media';
-      // Inferir por nombre
-      const name = (c?.gradeName || c?.name || '').toString().toLowerCase();
-      if (/basica|basico|basic/.test(name)) return 'basica';
+      // Inferir por nombre (buscar media primero para evitar que "1ro_medio" sea clasificado como basica por el número)
+      const name = (c?.gradeName || c?.fullName || c?.displayName || c?.longName || c?.label || c?.name || '').toString().toLowerCase();
       if (/media|medio|secundaria|secondary|high/.test(name)) return 'media';
+      if (/basica|basico|basic|bsica|bsico/.test(name)) return 'basica';
       const n = gradeNumOfCourse(c);
       if (typeof n === 'number') return n<=8 ? 'basica' : 'media';
       return undefined;
@@ -1265,7 +1265,19 @@ function GradesOverTimeChart({ monthlyPctByKey, semester, comparisonType, displa
     const sectionLetter = (s:any) => normalize((s?.shortName || s?.label || s?.name || '').replace(/.*\bsecci[óo]n\s*/i,''));
     const gradeNumOfCourse = (c:any): number | undefined => { const name: string = c?.gradeName || c?.fullName || c?.displayName || c?.longName || c?.label || c?.name || ''; const m=name.match(/(\d{1,2})/); return m?parseInt(m[1],10):undefined; };
     const levelOfCourse = (c:any): 'basica'|'media'|undefined => {
-      const lv=(c?.level||'').toString().toLowerCase(); if(/basica|basico|basic/.test(lv)) return 'basica'; if(/media|medio|secundaria|secondary|high/.test(lv)) return 'media'; const n=gradeNumOfCourse(c); if(typeof n==='number') return n<=8?'basica':'media'; return undefined;
+      // 1. Verificar campo level explícito
+      const lv=(c?.level||'').toString().toLowerCase(); 
+      if(/basica|basico|basic|bsica|bsico/.test(lv)) return 'basica'; 
+      if(/media|medio|secundaria|secondary|high/.test(lv)) return 'media'; 
+      // 2. Verificar en el nombre del curso (para courseIds como "1ro_bsico", "2do_medio", etc.)
+      const nm=(c?.gradeName || c?.fullName || c?.displayName || c?.longName || c?.label || c?.name || '').toString().toLowerCase();
+      // Primero buscar indicadores explícitos de media (para no confundir "1ro_medio" con basica por el número 1)
+      if(/media|medio|secundaria|secondary|high/.test(nm)) return 'media';
+      if(/basica|basico|basic|bsica|bsico/.test(nm)) return 'basica';
+      // 3. Fallback: inferir del número de grado (solo si no hay indicador de nivel en el nombre)
+      const n=gradeNumOfCourse(c); 
+      if(typeof n==='number') return n<=8?'basica':'media'; 
+      return undefined;
     };
 
     // Scopes igual que el comparador
