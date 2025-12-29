@@ -547,7 +547,9 @@ function GradesOverTimeChart({ monthlyPctByKey, semester, comparisonType, displa
         const rng = __getSemesterRange(yearRef, semester);
         if (rng.start && rng.end) {
           const sM = new Date(rng.start).getMonth();
-          const eM = new Date(rng.end).getMonth();
+          let eM = new Date(rng.end).getMonth();
+          // Para S2, asegurar que el rango llegue al menos hasta diciembre (11)
+          if (semester === 'S2' && eM < 11) eM = 11;
           return { start: Math.min(sM, eM), end: Math.max(sM, eM) };
         }
       } else {
@@ -559,7 +561,11 @@ function GradesOverTimeChart({ monthlyPctByKey, semester, comparisonType, displa
         if (s1.end) months.push(new Date(s1.end).getMonth()+1);
         if (s2.start) months.push(new Date(s2.start).getMonth()+1);
         if (s2.end) months.push(new Date(s2.end).getMonth()+1);
-        if (months.length) return { start: Math.min(...months)-1, end: Math.max(...months)-1 };
+        if (months.length) {
+          // Asegurar que el rango siempre llegue hasta diciembre (12 = mes 11 en 0-based)
+          const endMonth = Math.max(...months, 12);
+          return { start: Math.min(...months)-1, end: endMonth - 1 };
+        }
       }
     } catch {}
   // Fallback sin calendario: S1=Mar-Jun, S2=Jul-Dic
