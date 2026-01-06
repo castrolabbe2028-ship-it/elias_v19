@@ -317,6 +317,75 @@ export class UserService {
   }
 
   /**
+   * Actualizar preferencia de notificaciones por email del usuario
+   */
+  async updateUserEmailNotificationPreference(userId: string, enabled: boolean, email: string): Promise<boolean> {
+    try {
+      console.log('🔔 [USER SERVICE] Actualizando preferencia de notificaciones:', { userId, enabled, email });
+      
+      // Guardar en localStorage como respaldo
+      localStorage.setItem(`emailNotifications_${userId}`, String(enabled));
+      
+      // Intentar guardar en backend/Firebase
+      const response = await fetch(`${API_BASE_URL}/users/${userId}/notification-preferences`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': this.getAuthToken(),
+        },
+        body: JSON.stringify({ 
+          emailNotificationsEnabled: enabled,
+          notificationEmail: email,
+          senderEmail: 'notificaciones@smartstudent.online'
+        }),
+      });
+
+      if (!response.ok) {
+        console.warn('⚠️ [USER SERVICE] Backend no disponible, preferencia guardada solo en localStorage');
+        return true; // Retornamos true porque localStorage funcionó
+      }
+
+      console.log('✅ [USER SERVICE] Preferencia de notificaciones actualizada en backend');
+      return true;
+    } catch (error) {
+      console.warn('⚠️ [USER SERVICE] Error guardando preferencia en backend, usando localStorage:', error);
+      return true; // Retornamos true porque localStorage funcionó
+    }
+  }
+
+  /**
+   * Obtener preferencia de notificaciones por email del usuario
+   */
+  async getUserEmailNotificationPreference(userId: string): Promise<boolean> {
+    try {
+      // Primero intentar obtener de localStorage
+      const localPref = localStorage.getItem(`emailNotifications_${userId}`);
+      if (localPref !== null) {
+        return localPref === 'true';
+      }
+      
+      // Si no está en localStorage, intentar backend
+      const response = await fetch(`${API_BASE_URL}/users/${userId}/notification-preferences`, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': this.getAuthToken(),
+        },
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        return data.emailNotificationsEnabled || false;
+      }
+      
+      return false;
+    } catch (error) {
+      console.warn('⚠️ [USER SERVICE] Error obteniendo preferencia:', error);
+      return false;
+    }
+  }
+
+  /**
    * Fallback: Actualizar perfil en localStorage
    */
   private updateUserProfileInLocalStorage(username: string, updates: Partial<UserProfile>): boolean {

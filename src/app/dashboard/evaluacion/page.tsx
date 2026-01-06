@@ -22,6 +22,7 @@ import { Label } from '@/components/ui/label';
 import type { EvaluationHistoryItem } from '@/lib/types';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { TaskNotificationManager } from '@/lib/notifications'; 
+import { sendEmailOnNotification } from '@/services/email-notification.service'; 
 
 type UserAnswer = boolean | number | number[] | null; 
 
@@ -818,6 +819,51 @@ export default function EvaluacionPage() {
                   // Disparar evento para actualizar notificaciones del profesor en tiempo real
                   window.dispatchEvent(new Event('taskNotificationsUpdated'));
                   console.log('✅ Evaluation completion notification created for teacher');
+                  
+                  // 📧 NUEVO: Enviar email al apoderado cuando el estudiante termina la evaluación
+                  try {
+                    const storedUsers = localStorage.getItem('smart-student-users');
+                    if (storedUsers && user) {
+                      const allUsers = JSON.parse(storedUsers);
+                      const studentUser = allUsers.find((u: any) => u.id === (user as any).id || u.username === user.username);
+                      
+                      // Buscar apoderados del estudiante
+                      const guardianIds = allUsers
+                        .filter((u: any) => 
+                          u.role === 'guardian' && 
+                          (u.assignedStudents?.includes((user as any).id) || 
+                           u.assignedStudents?.includes(user.username) ||
+                           u.studentIds?.includes((user as any).id) ||
+                           u.studentIds?.includes(user.username))
+                        )
+                        .map((u: any) => u.id);
+                      
+                      if (guardianIds.length > 0) {
+                        console.log(`📧 [EVALUACIÓN] Enviando email a ${guardianIds.length} apoderado(s)`);
+                        sendEmailOnNotification(
+                          'evaluation_completed',
+                          guardianIds,
+                          {
+                            title: `${studentDisplayName} ha completado una evaluación`,
+                            content: `${studentDisplayName} ha completado la evaluación "${currentTask.title || evaluationTitle}" con un resultado de ${finalScore}/${totalQuestions} (${Math.round(percentage)}%)`,
+                            taskTitle: currentTask.title || evaluationTitle,
+                            senderName: 'Smart Student',
+                            courseName: selectedCourse,
+                            grade: finalScore,
+                            feedback: `Porcentaje: ${Math.round(percentage)}%`
+                          }
+                        ).then(() => {
+                          console.log(`📧 [EVALUACIÓN] Email enviado a apoderados exitosamente`);
+                        }).catch((emailError) => {
+                          console.warn('⚠️ [EVALUACIÓN] Error enviando email a apoderados:', emailError);
+                        });
+                      } else {
+                        console.log('📧 [EVALUACIÓN] No se encontraron apoderados para el estudiante');
+                      }
+                    }
+                  } catch (emailError) {
+                    console.warn('⚠️ [EVALUACIÓN] Error en envío de email a apoderados:', emailError);
+                  }
                 } else {
                   console.log('ℹ️ No task found, skipping teacher notification');
                 }

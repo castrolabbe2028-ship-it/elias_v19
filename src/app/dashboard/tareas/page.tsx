@@ -10,6 +10,7 @@
   import { Checkbox } from '@/components/ui/checkbox';
   import { Input } from '@/components/ui/input';
   import { TaskNotificationManager } from '@/lib/notifications';
+  import { sendEmailOnNotification } from '@/services/email-notification.service';
   import { Label } from '@/components/ui/label';
   import { Textarea } from '@/components/ui/textarea';
   import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -2149,6 +2150,109 @@
         formData.taskType === 'evaluacion' ? 'evaluation' : 'assignment'
       );
 
+      // 📧 Enviar notificaciones por email a los estudiantes
+      try {
+        let recipientIds: string[] = [];
+        
+        if (formData.assignedTo === 'student' && formData.assignedStudentIds.length > 0) {
+          // Tarea asignada a estudiantes específicos
+          recipientIds = formData.assignedStudentIds;
+          console.log(`📧 [TAREAS] Tarea asignada a estudiantes específicos:`, recipientIds);
+        } else {
+          // Tarea asignada a todo el curso/sección - Usar asignaciones oficiales
+          const storedAssignments = localStorage.getItem('smart-student-student-assignments');
+          const storedUsers = localStorage.getItem('smart-student-users');
+          
+          if (storedAssignments && storedUsers) {
+            const allAssignments = JSON.parse(storedAssignments);
+            const allUsers = JSON.parse(storedUsers);
+            
+            // Buscar estudiantes por sectionId en las asignaciones
+            const sectionId = selectedSection?.id;
+            const courseId = actualCourseId;
+            
+            let studentsInSection = allAssignments
+              .filter((a: any) => String(a.sectionId) === String(sectionId))
+              .map((a: any) => a.studentId);
+            
+            console.log(`📧 [TAREAS] Estudiantes en sección ${sectionId}:`, studentsInSection);
+            
+            // Fallback: buscar por courseId si no hay por sectionId
+            if (studentsInSection.length === 0) {
+              studentsInSection = allAssignments
+                .filter((a: any) => String(a.courseId) === String(courseId))
+                .map((a: any) => a.studentId);
+              console.log(`📧 [TAREAS] Fallback por courseId ${courseId}:`, studentsInSection);
+            }
+            
+            // Obtener IDs de usuarios estudiantes que están en esta sección
+            recipientIds = allUsers
+              .filter((u: any) => u.role === 'student' && studentsInSection.includes(u.id))
+              .map((u: any) => u.id);
+            
+            console.log(`📧 [TAREAS] Recipients por asignaciones:`, recipientIds.length);
+            
+            // Segundo fallback: buscar por activeCourses del usuario
+            if (recipientIds.length === 0) {
+              recipientIds = allUsers
+                .filter((u: any) => 
+                  u.role === 'student' && 
+                  (u.activeCourses?.some((ac: string) => 
+                    ac === courseSectionId || 
+                    ac.includes(actualCourseId) ||
+                    ac.includes(selectedCourse?.name || '')
+                  ) ||
+                  (String(u.courseId) === String(courseId) && String(u.sectionId) === String(sectionId)))
+                )
+                .map((u: any) => u.id);
+              console.log(`📧 [TAREAS] Recipients por fallback:`, recipientIds.length);
+            }
+          }
+        }
+        
+        // También incluir apoderados
+        const storedUsers = localStorage.getItem('smart-student-users');
+        if (storedUsers && recipientIds.length > 0) {
+          const allUsers = JSON.parse(storedUsers);
+          const guardianIds = allUsers
+            .filter((u: any) => 
+              u.role === 'guardian' && 
+              (u.assignedStudents?.some((studentId: string) => recipientIds.includes(studentId)) ||
+               u.studentIds?.some((studentId: string) => recipientIds.includes(studentId)))
+            )
+            .map((u: any) => u.id);
+          
+          console.log(`📧 [TAREAS] Apoderados encontrados:`, guardianIds.length);
+          recipientIds = [...new Set([...recipientIds, ...guardianIds])];
+        }
+        
+        console.log(`📧 [TAREAS] Total recipients finales:`, recipientIds.length);
+        
+        if (recipientIds.length > 0) {
+          // Usar .then/.catch en lugar de await para evitar requerir async
+          sendEmailOnNotification(
+            formData.taskType === 'evaluacion' ? 'evaluation_assigned' : 'task_assigned',
+            recipientIds,
+            {
+              title: formData.taskType === 'evaluacion' ? 'Nueva Evaluación Asignada' : 'Nueva Tarea Asignada',
+              content: formData.description || `Se ha asignado ${formData.taskType === 'evaluacion' ? 'una nueva evaluación' : 'una nueva tarea'}: ${formData.title}`,
+              taskTitle: formData.title,
+              senderName: user?.displayName || user?.username || 'Profesor',
+              courseName: selectedCourse?.name || formData.course,
+              sectionName: selectedSection?.name
+            }
+          ).then(() => {
+            console.log(`📧 [TAREAS] Email notifications sent to ${recipientIds.length} recipients`);
+          }).catch((emailError) => {
+            console.warn('⚠️ [TAREAS] Error sending email notifications:', emailError);
+          });
+        } else {
+          console.warn(`⚠️ [TAREAS] No se encontraron destinatarios para el email`);
+        }
+      } catch (emailError) {
+        console.warn('⚠️ [TAREAS] Error sending email notifications:', emailError);
+      }
+
       toast({
         title: translate('taskCreated'),
         description: translate('taskCreatedDesc', { title: formData.title }),
@@ -2368,6 +2472,49 @@
       // Registrar que estamos limpiando los archivos adjuntos después de guardar el comentario
       console.log('🧹 Limpiando archivos adjuntos después de guardar', commentAttachments.length);
       setCommentAttachments([]);
+
+      // 📧 Enviar notificación por email si es un comentario del profesor a un estudiante
+      if (user?.role === 'teacher' && !isSubmission && selectedTask) {
+        try {
+          // Obtener los estudiantes asignados a esta tarea
+          const assignedStudents = getAssignedStudentsForTask(selectedTask);
+          const recipientIds = assignedStudents.map(s => s.id);
+          
+          // También incluir apoderados
+          const storedUsers = localStorage.getItem('smart-student-users');
+          if (storedUsers) {
+            const allUsers = JSON.parse(storedUsers);
+            const guardianIds = allUsers
+              .filter((u: any) => 
+                u.role === 'guardian' && 
+                u.assignedStudents?.some((studentId: string) => recipientIds.includes(studentId))
+              )
+              .map((u: any) => u.id);
+            recipientIds.push(...guardianIds);
+          }
+          
+          if (recipientIds.length > 0) {
+            // Usar .then/.catch en lugar de await para evitar requerir async
+            sendEmailOnNotification(
+              'task_comment',
+              recipientIds,
+              {
+                title: `Nuevo comentario en la tarea: ${selectedTask.title}`,
+                content: newComment,
+                taskTitle: selectedTask.title,
+                senderName: user?.displayName || user?.username || 'Profesor',
+                courseName: selectedTask.course
+              }
+            ).then(() => {
+              console.log(`📧 [TAREAS] Comment notification email sent to ${recipientIds.length} recipients`);
+            }).catch((emailError) => {
+              console.warn('⚠️ [TAREAS] Error sending comment email notification:', emailError);
+            });
+          }
+        } catch (emailError) {
+          console.warn('⚠️ [TAREAS] Error sending comment email notification:', emailError);
+        }
+      }
 
       if (!isSubmission) {
         toast({
@@ -3354,7 +3501,7 @@
     };
 
     // Function for teacher to grade a submission - UPDATED para estado Finalizado
-    const handleGradeSubmission = (submissionId: string, grade: number, teacherComment: string) => {
+    const handleGradeSubmission = async (submissionId: string, grade: number, teacherComment: string) => {
       const updatedComments = comments.map(comment => 
         comment.id === submissionId 
           ? { 
@@ -3469,6 +3616,47 @@
         const existingNotifications = JSON.parse(localStorage.getItem('smart-student-notifications') || '[]');
         const updatedNotifications = [...existingNotifications, notification];
         localStorage.setItem('smart-student-notifications', JSON.stringify(updatedNotifications));
+
+        // 📧 Enviar notificación por email al estudiante
+        try {
+          const recipientIds = [submission.studentId];
+          
+          // También notificar al apoderado si existe
+          const storedUsers = localStorage.getItem('smart-student-users');
+          if (storedUsers) {
+            const allUsers = JSON.parse(storedUsers);
+            const guardianIds = allUsers
+              .filter((u: any) => 
+                u.role === 'guardian' && 
+                (u.assignedStudents?.includes(submission.studentId) ||
+                 u.studentIds?.includes(submission.studentId))
+              )
+              .map((u: any) => u.id);
+            
+            console.log(`📧 [TAREAS] Apoderados encontrados para calificación:`, guardianIds.length);
+            recipientIds.push(...guardianIds);
+          }
+          
+          // Determinar si es evaluación o tarea para el tipo de email
+          const isEvaluation = selectedTask.taskType === 'evaluacion' || selectedTask.taskType === 'evaluation';
+          
+          await sendEmailOnNotification(
+            isEvaluation ? 'evaluation_graded' : 'task_graded',
+            recipientIds,
+            {
+              title: `Tu ${isEvaluation ? 'evaluación' : 'tarea'} "${selectedTask.title}" ha sido calificada`,
+              content: teacherComment || `Tu ${isEvaluation ? 'evaluación' : 'tarea'} ha sido revisada y calificada.`,
+              taskTitle: selectedTask.title,
+              senderName: user?.displayName || user?.username || 'Profesor',
+              courseName: selectedTask.course,
+              grade: grade,
+              feedback: teacherComment
+            }
+          );
+          console.log(`📧 [TAREAS] Grade notification email sent to student ${submission.studentId} and ${recipientIds.length - 1} guardians`);
+        } catch (emailError) {
+          console.warn('⚠️ [TAREAS] Error sending grade email notification:', emailError);
+        }
       }
 
       toast({

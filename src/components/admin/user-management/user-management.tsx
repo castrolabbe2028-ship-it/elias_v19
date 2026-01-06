@@ -570,7 +570,11 @@ export default function UserManagement() {
     const updatedAllUsers = [...allUsers, newUserForMain];
     localStorage.setItem('smart-student-users', JSON.stringify(updatedAllUsers));
 
-    // 🔄 Disparar evento de sincronización para estudiantes específicos
+    // � Activar notificaciones por email por defecto para el nuevo usuario
+    localStorage.setItem(`emailNotifications_${baseUser.id}`, 'true');
+    console.log(`📧 [USER MGMT] Notificaciones por email activadas por defecto para: ${baseUser.username}`);
+
+    // �🔄 Disparar evento de sincronización para estudiantes específicos
     window.dispatchEvent(new CustomEvent('usersUpdated', {
       detail: { 
         action: 'create', 

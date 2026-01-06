@@ -16,6 +16,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { toast } from '@/hooks/use-toast';
 import { LocalStorageManager } from '@/lib/education-utils';
+import { sendEmailOnNotification } from '@/services/email-notification.service';
 
 // Tipos de datos
 interface Communication {
@@ -1137,6 +1138,274 @@ export default function ComunicacionesPage() {
       setCommunications(updatedCommunications);
       localStorage.setItem('smart-student-communications', JSON.stringify(updatedCommunications));
   try { window.dispatchEvent(new CustomEvent('studentCommunicationsUpdated', { detail: { action: 'created' } })); } catch {}
+
+      // 📧 Enviar notificaciones por email a los destinatarios
+      try {
+        let recipientIds: string[] = [];
+        let courseName = '';
+        let sectionName = '';
+        
+        console.log(`📧 [COMUNICACIONES] Iniciando envío de emails. Tipo: ${formData.type}`);
+        
+        if (formData.type === 'student') {
+          // Para comunicaciones a estudiantes específicos
+          recipientIds = (formData.selectedStudents && formData.selectedStudents.length > 0)
+            ? formData.selectedStudents
+            : (formData.targetStudent ? [formData.targetStudent] : []);
+          
+          console.log(`📧 [COMUNICACIONES] Comunicación particular - Recipients:`, recipientIds);
+          
+          // Obtener info del curso
+          if (formData.selectedCourseForStudent) {
+            const cs = courseSections.find(c => c.id === formData.selectedCourseForStudent);
+            if (cs) {
+              courseName = cs.courseName;
+              sectionName = cs.sectionName;
+            }
+          }
+        } else {
+          // Para comunicaciones a un curso/sección completo
+          const courseId = formData.targetCourse;
+          const sectionId = formData.targetSection;
+          courseName = courses.find(c => c.id === courseId)?.name || '';
+          sectionName = sections.find(s => s.id === sectionId)?.name || '';
+          
+          console.log(`📧 [COMUNICACIONES] ========== DIAGNÓSTICO COMUNICACIÓN CURSO ==========`);
+          console.log(`📧 [COMUNICACIONES] CourseId seleccionado: "${courseId}"`);
+          console.log(`📧 [COMUNICACIONES] SectionId seleccionado: "${sectionId}"`);
+          console.log(`📧 [COMUNICACIONES] Curso encontrado: "${courseName}"`);
+          console.log(`📧 [COMUNICACIONES] Sección encontrada: "${sectionName}"`);
+          
+          const storedUsers = localStorage.getItem('smart-student-users');
+          const currentYear = new Date().getFullYear();
+          
+          // MÉTODO PRINCIPAL: Buscar en smart-student-students-{year} que tiene sectionId
+          const studentsForYear = JSON.parse(localStorage.getItem(`smart-student-students-${currentYear}`) || '[]');
+          console.log(`📧 [COMUNICACIONES] Estudiantes del año ${currentYear}: ${studentsForYear.length}`);
+          
+          if (studentsForYear.length > 0) {
+            // Buscar estudiantes que tengan el sectionId correcto
+            const studentsInSection = studentsForYear.filter((s: any) => 
+              String(s.sectionId) === String(sectionId)
+            );
+            console.log(`📧 [COMUNICACIONES] Estudiantes con sectionId ${sectionId}: ${studentsInSection.length}`);
+            
+            if (studentsInSection.length > 0) {
+              recipientIds = studentsInSection.map((s: any) => s.id);
+              console.log(`📧 [COMUNICACIONES] ✅ Recipients encontrados por students-year: ${recipientIds.length}`);
+            } else {
+              // Fallback: buscar por courseId
+              const studentsInCourse = studentsForYear.filter((s: any) => 
+                String(s.courseId) === String(courseId)
+              );
+              console.log(`📧 [COMUNICACIONES] Estudiantes con courseId ${courseId}: ${studentsInCourse.length}`);
+              
+              if (studentsInCourse.length > 0) {
+                recipientIds = studentsInCourse.map((s: any) => s.id);
+                console.log(`📧 [COMUNICACIONES] ✅ Recipients por courseId: ${recipientIds.length}`);
+              }
+            }
+          }
+          
+          // MÉTODO SECUNDARIO: Si no encontramos en students-year, buscar en smart-student-student-assignments
+          if (recipientIds.length === 0) {
+            console.log(`📧 [COMUNICACIONES] Buscando en student-assignments...`);
+            const storedAssignments = localStorage.getItem('smart-student-student-assignments');
+            
+            if (storedAssignments && storedUsers) {
+              const allAssignments = JSON.parse(storedAssignments);
+              const allUsers = JSON.parse(storedUsers);
+              
+              console.log(`📧 [COMUNICACIONES] Total asignaciones: ${allAssignments.length}`);
+              
+              if (allAssignments.length > 0) {
+                const studentsInSection = allAssignments
+                  .filter((a: any) => String(a.sectionId) === String(sectionId))
+                  .map((a: any) => a.studentId);
+                
+                recipientIds = allUsers
+                  .filter((u: any) => u.role === 'student' && studentsInSection.includes(u.id))
+                  .map((u: any) => u.id);
+                
+                console.log(`📧 [COMUNICACIONES] Recipients por assignments: ${recipientIds.length}`);
+              }
+            }
+          }
+          
+          // MÉTODO TERCIARIO: Buscar en usuarios directamente por propiedades
+          if (recipientIds.length === 0 && storedUsers) {
+            console.log(`📧 [COMUNICACIONES] Buscando en usuarios por propiedades directas...`);
+            const allUsers = JSON.parse(storedUsers);
+            
+            // Buscar usuarios con sectionId directo
+            recipientIds = allUsers
+              .filter((u: any) => {
+                if (u.role !== 'student') return false;
+                
+                // Verificar sectionId directo
+                if (String(u.sectionId) === String(sectionId)) {
+                  console.log(`📧 [COMUNICACIONES] ✅ Match por sectionId: ${u.displayName || u.username}`);
+                  return true;
+                }
+                
+                // Verificar courseId + section name
+                if (String(u.courseId) === String(courseId) && 
+                    (u.section === sectionName || u.sectionName === sectionName)) {
+                  console.log(`📧 [COMUNICACIONES] ✅ Match por courseId+section: ${u.displayName || u.username}`);
+                  return true;
+                }
+                
+                // Verificar activeCourses
+                const courseSectionKey = `${courseId}-${sectionId}`;
+                if (u.activeCourses?.some((ac: string) => 
+                  ac === courseSectionKey || 
+                  ac === `${courseId}::${sectionId}` ||
+                  (ac.includes(courseId) && ac.includes(sectionId))
+                )) {
+                  console.log(`📧 [COMUNICACIONES] ✅ Match por activeCourses: ${u.displayName || u.username}`);
+                  return true;
+                }
+                
+                return false;
+              })
+              .map((u: any) => u.id);
+            
+            console.log(`📧 [COMUNICACIONES] Recipients por propiedades: ${recipientIds.length}`);
+          }
+          
+          // MÉTODO FINAL: Buscar por nombre de curso en activeCourses
+          if (recipientIds.length === 0 && storedUsers && courseName) {
+            console.log(`📧 [COMUNICACIONES] Último recurso: buscando por nombre de curso "${courseName} ${sectionName}"...`);
+            const allUsers = JSON.parse(storedUsers);
+            const searchTerms = [
+              `${courseName} ${sectionName}`.toLowerCase(),
+              `${courseName}-${sectionName}`.toLowerCase(),
+              `${courseName}${sectionName}`.toLowerCase()
+            ];
+            
+            recipientIds = allUsers
+              .filter((u: any) => {
+                if (u.role !== 'student') return false;
+                
+                // Buscar en activeCourses por nombre
+                if (u.activeCourses?.some((ac: string) => {
+                  const acLower = ac.toLowerCase();
+                  return searchTerms.some(term => acLower.includes(term) || term.includes(acLower));
+                })) {
+                  return true;
+                }
+                
+                // Buscar en course/section properties
+                const userCourse = (u.course || u.courseName || '').toLowerCase();
+                const userSection = (u.section || u.sectionName || '').toLowerCase();
+                if (userCourse.includes(courseName.toLowerCase()) && 
+                    userSection.includes(sectionName.toLowerCase())) {
+                  return true;
+                }
+                
+                return false;
+              })
+              .map((u: any) => u.id);
+            
+            console.log(`📧 [COMUNICACIONES] Recipients por nombre: ${recipientIds.length}`);
+          }
+          
+          console.log(`📧 [COMUNICACIONES] ========== FIN DIAGNÓSTICO ==========`);
+        }
+        
+        // También incluir apoderados de los estudiantes
+        const storedUsers = localStorage.getItem('smart-student-users');
+        const currentYear = new Date().getFullYear();
+        
+        if (recipientIds.length > 0) {
+          let guardianIds: string[] = [];
+          
+          // Método 1: Buscar en smart-student-guardians-{year}
+          const guardiansForYear = JSON.parse(localStorage.getItem(`smart-student-guardians-${currentYear}`) || '[]');
+          console.log(`📧 [COMUNICACIONES] Apoderados en año ${currentYear}: ${guardiansForYear.length}`);
+          
+          if (guardiansForYear.length > 0) {
+            guardianIds = guardiansForYear
+              .filter((g: any) => g.studentIds?.some((sid: string) => recipientIds.includes(sid)))
+              .map((g: any) => g.id);
+            console.log(`📧 [COMUNICACIONES] Apoderados por studentIds (year): ${guardianIds.length}`);
+          }
+          
+          // Método 2: Buscar en smart-student-guardian-students (relaciones)
+          if (guardianIds.length === 0) {
+            const guardianRelations = JSON.parse(localStorage.getItem('smart-student-guardian-students') || '[]');
+            console.log(`📧 [COMUNICACIONES] Relaciones guardian-student: ${guardianRelations.length}`);
+            
+            if (guardianRelations.length > 0) {
+              const guardianIdsFromRelations = guardianRelations
+                .filter((r: any) => recipientIds.includes(r.studentId))
+                .map((r: any) => r.guardianId);
+              guardianIds = [...new Set(guardianIdsFromRelations)];
+              console.log(`📧 [COMUNICACIONES] Apoderados por relaciones: ${guardianIds.length}`);
+            }
+          }
+          
+          // Método 3: Buscar en smart-student-users por studentIds o assignedStudents
+          if (guardianIds.length === 0 && storedUsers) {
+            const allUsers = JSON.parse(storedUsers);
+            guardianIds = allUsers
+              .filter((u: any) => {
+                if (u.role !== 'guardian') return false;
+                
+                // Verificar studentIds (formato principal)
+                if (u.studentIds?.some((sid: string) => recipientIds.includes(sid))) {
+                  return true;
+                }
+                
+                // Verificar assignedStudents (formato alternativo)
+                if (u.assignedStudents?.some((sid: string) => recipientIds.includes(sid))) {
+                  return true;
+                }
+                
+                // Verificar children (otro formato posible)
+                if (u.children?.some((sid: string) => recipientIds.includes(sid))) {
+                  return true;
+                }
+                
+                return false;
+              })
+              .map((u: any) => u.id);
+            console.log(`📧 [COMUNICACIONES] Apoderados por users: ${guardianIds.length}`);
+          }
+          
+          console.log(`📧 [COMUNICACIONES] Total apoderados encontrados: ${guardianIds.length}`);
+          
+          if (guardianIds.length > 0) {
+            recipientIds = [...new Set([...recipientIds, ...guardianIds])];
+          }
+        }
+        
+        console.log(`📧 [COMUNICACIONES] Total recipients finales: ${recipientIds.length}`);
+        
+        if (recipientIds.length > 0) {
+          // Usar .then/.catch en lugar de await para evitar requerir async
+          sendEmailOnNotification(
+            'communication',
+            recipientIds,
+            {
+              title: formData.title,
+              content: formData.content,
+              senderName: user?.displayName || user?.username || 'Profesor',
+              courseName: courseName,
+              sectionName: sectionName
+            }
+          ).then(() => {
+            console.log(`📧 [COMUNICACIONES] ✅ Email notifications sent to ${recipientIds.length} recipients`);
+          }).catch((emailError) => {
+            console.warn('⚠️ [COMUNICACIONES] Error sending email notifications:', emailError);
+          });
+        } else {
+          console.warn(`⚠️ [COMUNICACIONES] No se encontraron destinatarios para el email`);
+        }
+      } catch (emailError) {
+        console.warn('⚠️ [COMUNICACIONES] Error sending email notifications:', emailError);
+        // No mostrar error al usuario, las notificaciones de campana ya se enviaron
+      }
 
       // Limpiar formulario
       setFormData({

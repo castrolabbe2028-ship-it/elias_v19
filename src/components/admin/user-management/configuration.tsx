@@ -4093,12 +4093,12 @@ export default function Configuration() {
     setResetSystemProgress({
       phase: translate('resetProgressInitializing') || 'Preparando...',
       current: 0,
-      total: 15
+      total: 19
     });
     
     setShowResetProgressModal(true);
     
-    const totalSteps = 15; // 15 pasos reales (incluyendo apoderados y relaciones)
+    const totalSteps = 19; // 19 pasos (incluyendo comunicaciones, tareas, evaluaciones y notificaciones)
     let currentStep = 0;
 
     const updateProgress = (phaseKey: string) => {
@@ -4197,14 +4197,41 @@ export default function Configuration() {
       localStorage.removeItem('smart-student-attendance');
       console.log('✅ Asistencia de LocalStorage eliminada');
 
-      // Paso 12: Limpiar usuarios (solo estudiantes y profesores del año)
+      // Paso 12: Eliminar comunicaciones
+      updateProgress('resetProgressCommunications');
+      localStorage.removeItem('smart-student-communications');
+      console.log('✅ Comunicaciones eliminadas');
+
+      // Paso 13: Eliminar tareas
+      updateProgress('resetProgressTasks');
+      localStorage.removeItem('smart-student-tasks');
+      console.log('✅ Tareas eliminadas');
+
+      // Paso 14: Eliminar evaluaciones
+      updateProgress('resetProgressEvaluations');
+      localStorage.removeItem('smart-student-evaluations');
+      console.log('✅ Evaluaciones eliminadas');
+
+      // Paso 15: Eliminar notificaciones
+      updateProgress('resetProgressNotifications');
+      localStorage.removeItem('smart-student-notifications');
+      // También eliminar preferencias de notificaciones por email de usuarios
+      const allKeys = Object.keys(localStorage);
+      allKeys.forEach(key => {
+        if (key.startsWith('emailNotifications_')) {
+          localStorage.removeItem(key);
+        }
+      });
+      console.log('✅ Notificaciones eliminadas');
+
+      // Paso 16: Limpiar usuarios (solo estudiantes y profesores del año)
       updateProgress('resetProgressUsers');
       const allUsers = JSON.parse(localStorage.getItem('smart-student-users') || '[]');
       const admins = allUsers.filter((u: any) => u.role === 'admin');
       safeSaveSmartStudentUsers(admins, 'resetSystem');
       console.log('✅ Usuarios limpiados (admins preservados)');
 
-      // Paso 13: Finalizar (disparar eventos y actualizar contadores)
+      // Paso 17: Finalizar (disparar eventos y actualizar contadores)
       updateProgress('resetProgressCounters');
       
       // Disparar eventos de actualización
@@ -4216,6 +4243,9 @@ export default function Configuration() {
         window.dispatchEvent(new CustomEvent('studentAssignmentsChanged', { detail: { action: 'reset-system' } }));
         window.dispatchEvent(new CustomEvent('sqlGradesUpdated', { detail: { year: selectedYear, action: 'reset' } }));
         window.dispatchEvent(new CustomEvent('sqlAttendanceUpdated', { detail: { year: selectedYear, action: 'reset' } }));
+        window.dispatchEvent(new CustomEvent('communicationsUpdated', { detail: { action: 'reset-system' } }));
+        window.dispatchEvent(new CustomEvent('tasksUpdated', { detail: { action: 'reset-system' } }));
+        window.dispatchEvent(new CustomEvent('evaluationsUpdated', { detail: { action: 'reset-system' } }));
       } catch (e) {
         console.warn('⚠️ Error al disparar eventos:', e);
       }
@@ -4632,6 +4662,19 @@ export default function Configuration() {
         if (verification) {
           const parsed = JSON.parse(verification);
           console.log('✅ [CARGA EXCEL] Usuarios guardados exitosamente. Total en storage:', parsed.length);
+          
+          // 📧 Activar notificaciones por email por defecto para todos los usuarios nuevos
+          console.log('📧 [CARGA EXCEL] Activando notificaciones por email por defecto...');
+          let emailNotificationsEnabled = 0;
+          for (const user of parsed) {
+            const prefKey = `emailNotifications_${user.id}`;
+            // Solo activar si no existe preferencia previa (usuarios nuevos)
+            if (localStorage.getItem(prefKey) === null) {
+              localStorage.setItem(prefKey, 'true');
+              emailNotificationsEnabled++;
+            }
+          }
+          console.log(`📧 [CARGA EXCEL] Notificaciones por email activadas para ${emailNotificationsEnabled} usuarios nuevos`);
         } else {
           throw new Error('No se pudo verificar el guardado en localStorage');
         }

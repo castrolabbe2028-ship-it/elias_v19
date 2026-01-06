@@ -7,7 +7,8 @@ import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { UserCircle, UserCircle2, BarChart3, History as HistoryIcon, Download, Trash2, Edit3, Award, Percent, Newspaper, Network, FileQuestion, Upload, Camera, Shield, Crown, GraduationCap, CheckCircle, AlertTriangle, Users, BookOpen, Layers, School } from 'lucide-react';
+import { UserCircle, UserCircle2, BarChart3, History as HistoryIcon, Download, Trash2, Edit3, Award, Percent, Newspaper, Network, FileQuestion, Upload, Camera, Shield, Crown, GraduationCap, CheckCircle, AlertTriangle, Users, BookOpen, Layers, School, Bell } from 'lucide-react';
+import { Switch } from '@/components/ui/switch';
 import type { UserProfile, SubjectProgress, EvaluationHistoryItem } from '@/lib/types';
 import { useEffect, useState, useMemo } from 'react';
 import { LocalStorageManager } from '@/lib/education-utils';
@@ -66,7 +67,7 @@ const profileStatsCardsTemplate = [
 
 export default function PerfilClient() {
   const { translate, language } = useLanguage();
-  const { user } = useAuth();
+  const { user, refreshUser } = useAuth();
   const router = useRouter();
   const { toast } = useToast();
   const [evaluationHistory, setEvaluationHistory] = useState<EvaluationHistoryItem[]>([]);
@@ -94,6 +95,54 @@ export default function PerfilClient() {
   // 🔄 Estado para forzar actualización cuando cambien los datos de gestión
   const [refreshTrigger, setRefreshTrigger] = useState(0);
 
+  // 📧 Estado para notificaciones por email
+  const [emailNotificationsEnabled, setEmailNotificationsEnabled] = useState(false);
+  const [isSavingNotificationPref, setIsSavingNotificationPref] = useState(false);
+
+  // Cargar preferencia de notificaciones al montar
+  useEffect(() => {
+    if (user?.id) {
+      const savedPref = localStorage.getItem(`emailNotifications_${user.id}`);
+      setEmailNotificationsEnabled(savedPref === 'true');
+    }
+  }, [user?.id]);
+
+  // Función para manejar el cambio de preferencia de notificaciones
+  const handleEmailNotificationToggle = async (enabled: boolean) => {
+    if (!user?.id) return;
+    
+    setIsSavingNotificationPref(true);
+    try {
+      // Guardar en localStorage
+      localStorage.setItem(`emailNotifications_${user.id}`, String(enabled));
+      
+      // Guardar en el backend/Firebase (si existe el servicio)
+      try {
+        await userService.updateUserEmailNotificationPreference(user.id, enabled, user.email || '');
+      } catch (backendError) {
+        console.log('Backend update optional:', backendError);
+      }
+      
+      setEmailNotificationsEnabled(enabled);
+      toast({
+        title: enabled ? translate('profileEmailNotificationsEnabled') : translate('profileEmailNotificationsDisabled'),
+        description: enabled 
+          ? translate('profileEmailNotificationsEnabledDesc') 
+          : translate('profileEmailNotificationsDisabledDesc'),
+        variant: 'default',
+      });
+    } catch (error) {
+      console.error('Error saving notification preference:', error);
+      toast({
+        title: translate('profileSaveError'),
+        description: translate('profileSaveErrorDesc'),
+        variant: 'destructive',
+      });
+    } finally {
+      setIsSavingNotificationPref(false);
+    }
+  };
+
   // Fallback: si en producción no existen datos de gestión en localStorage, intentar poblar desde la API mock
   useEffect(() => {
     if (!user) return;
@@ -113,9 +162,17 @@ export default function PerfilClient() {
           .then(r => r.ok ? r.json() : null)
           .then((apiUser) => {
             if (!apiUser) return;
-            const merged = { ...apiUser };
+            // Encontrar usuario existente para preservar displayName y email editados
+            const existingUser = users.find(u => u.username === user.username);
+            // Merge preservando displayName y email del usuario existente si fueron editados
+            const merged = { 
+              ...apiUser,
+              // Preservar displayName y email editados por el usuario
+              displayName: existingUser?.displayName || apiUser.displayName,
+              email: existingUser?.email || apiUser.email
+            };
             const next = exists
-              ? users.map(u => u.username === user.username ? { ...u, ...merged } : u)
+              ? users.map(u => u.username === user.username ? { ...u, ...merged, displayName: u.displayName || merged.displayName, email: u.email || merged.email } : u)
               : [...users, merged];
             try { localStorage.setItem('smart-student-users', JSON.stringify(next)); } catch {}
             setRefreshTrigger(t => t + 1);
@@ -1616,7 +1673,10 @@ export default function PerfilClient() {
         name: editingName.trim()
       }));
 
-      // Finalizar edición ANTES de hacer toast para que se vean los cambios
+      // Llamar a refreshUser para actualizar el contexto de autenticación
+      refreshUser();
+
+      // Finalizar edición
       setIsEditingProfile(false);
       setIsSavingProfile(false);
 
@@ -1625,12 +1685,6 @@ export default function PerfilClient() {
         description: translate('profileSaveSuccessDesc'),
         variant: "default"
       });
-
-      // Recargar los datos del perfil inmediatamente
-      setTimeout(() => {
-        // Forzar recarga completa del perfil
-        window.location.reload();
-      }, 1000);
 
     } catch (error) {
       console.error('Error al guardar perfil:', error);
@@ -1823,6 +1877,42 @@ export default function PerfilClient() {
                       {translate('profileSystemRole')}
                     </label>
                     {renderRoleBadge()}
+                  </div>
+
+                  {/* 🔔 NOTIFICACIONES POR EMAIL */}
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 dark:text-slate-300 uppercase tracking-wider mb-2">
+                      {translate('profileEmailNotifications')}
+                    </label>
+                    <div className="flex items-center justify-between bg-gray-100 dark:bg-slate-700/60 rounded-lg p-3 border border-gray-300 dark:border-slate-600/50 shadow-sm">
+                      <div className="flex items-center gap-3">
+                        <div className={`w-8 h-8 rounded-full flex items-center justify-center ${emailNotificationsEnabled ? 'bg-blue-100 dark:bg-blue-900/40' : 'bg-gray-200 dark:bg-slate-600'}`}>
+                          <Bell className={`w-4 h-4 ${emailNotificationsEnabled ? 'text-blue-600 dark:text-blue-400' : 'text-gray-500 dark:text-slate-400'}`} />
+                        </div>
+                        <div className="flex flex-col">
+                          <span className="text-sm font-medium text-gray-800 dark:text-white">
+                            {emailNotificationsEnabled ? translate('profileNotificationsOn') : translate('profileNotificationsOff')}
+                          </span>
+                          <span className="text-xs text-gray-500 dark:text-slate-400">
+                            {translate('profileNotificationsEmailInfo')}
+                          </span>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        {isSavingNotificationPref && (
+                          <div className="w-4 h-4 border-2 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
+                        )}
+                        <Switch
+                          checked={emailNotificationsEnabled}
+                          onCheckedChange={handleEmailNotificationToggle}
+                          disabled={isSavingNotificationPref}
+                          className="data-[state=checked]:bg-gray-400"
+                        />
+                      </div>
+                    </div>
+                    <p className="text-xs text-gray-500 dark:text-slate-400 mt-1">
+                      {translate('profileNotificationsFrom')}: <span className="font-medium">notificaciones@smartstudent.online</span>
+                    </p>
                   </div>
 
                   {isEditingProfile && (
