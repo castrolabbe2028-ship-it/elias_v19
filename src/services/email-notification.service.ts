@@ -241,18 +241,23 @@ class EmailNotificationService {
     let failed = 0;
     let disabled = 0;
 
-    console.log(`📧 [EMAIL SERVICE] sendBulkEmailNotifications called with ${userIds.length} users:`, userIds);
+    console.log(`📧📧📧 [EMAIL SERVICE] ====================================`);
+    console.log(`📧📧📧 [EMAIL SERVICE] ENVIANDO EMAILS A ${userIds.length} USUARIOS`);
+    console.log(`📧📧📧 [EMAIL SERVICE] IDs:`, userIds);
+    console.log(`📧📧📧 [EMAIL SERVICE] Tipo: ${notificationData.type}`);
+    console.log(`📧📧📧 [EMAIL SERVICE] ====================================`);
 
     for (const userId of userIds) {
+      console.log(`📧 [EMAIL SERVICE] Procesando usuario: ${userId}`);
       const userInfo = this.getUserEmailInfo(userId);
       
       if (!userInfo) {
-        console.log(`📧 [EMAIL SERVICE] No email info found for user ${userId}`);
+        console.log(`❌ [EMAIL SERVICE] No email info found for user ${userId}`);
         failed++;
         continue;
       }
 
-      console.log(`📧 [EMAIL SERVICE] Found email for ${userId}: ${userInfo.email}`);
+      console.log(`✅ [EMAIL SERVICE] Email encontrado para ${userId}: ${userInfo.email} (${userInfo.name})`);
 
       const result = await this.sendEmailNotification({
         ...notificationData,
@@ -262,15 +267,20 @@ class EmailNotificationService {
       });
 
       if (result.emailSent) {
+        console.log(`✅✅ [EMAIL SERVICE] Email ENVIADO a ${userInfo.email}`);
         sent++;
       } else if (result.success && !result.emailSent) {
+        console.log(`⏭️ [EMAIL SERVICE] Email DESHABILITADO para ${userId}`);
         disabled++;
       } else {
+        console.log(`❌ [EMAIL SERVICE] Email FALLÓ para ${userInfo.email}: ${result.message}`);
         failed++;
       }
     }
 
-    console.log(`📧 [EMAIL SERVICE] Bulk send results: ${sent} sent, ${failed} failed, ${disabled} disabled`);
+    console.log(`📧📧📧 [EMAIL SERVICE] ====================================`);
+    console.log(`📧📧📧 [EMAIL SERVICE] RESUMEN: ${sent} enviados, ${failed} fallidos, ${disabled} deshabilitados`);
+    console.log(`📧📧📧 [EMAIL SERVICE] ====================================`);
     return { sent, failed, disabled };
   }
 

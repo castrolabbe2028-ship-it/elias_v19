@@ -142,6 +142,65 @@ export default function EvaluacionPage() {
     checkLocalStorageQuota();
   }, []); // Run once on mount
 
+  // Helper para obtener el nombre legible del curso CON SECCIÓN
+  const getCourseDisplayName = (courseId: string): string => {
+    try {
+      const courses = JSON.parse(localStorage.getItem('smart-student-courses') || '[]');
+      const sections = JSON.parse(localStorage.getItem('smart-student-sections') || '[]');
+      const currentYear = new Date().getFullYear();
+      const students = JSON.parse(localStorage.getItem(`smart-student-students-${currentYear}`) || '[]');
+      
+      // Si es un ID compuesto (courseId-sectionId)
+      if (courseId.includes('-') && courseId.length > 40) {
+        const parts = courseId.split('-');
+        if (parts.length >= 10) {
+          const actualCourseId = parts.slice(0, 5).join('-');
+          const sectionId = parts.slice(5).join('-');
+          
+          const course = courses.find((c: any) => c.id === actualCourseId);
+          const section = sections.find((s: any) => s.id === sectionId);
+          
+          if (course && section) {
+            return `${course.name} Sección ${section.name}`;
+          }
+        }
+      }
+      
+      // Buscar directamente en cursos
+      const course = courses.find((c: any) => c.id === courseId);
+      if (course) {
+        // Intentar obtener la sección del estudiante actual
+        const studentId = (user as any)?.id || user?.username;
+        const student = students.find((s: any) => s.id === studentId || s.username === studentId);
+        
+        if (student?.sectionId) {
+          const section = sections.find((s: any) => s.id === student.sectionId);
+          if (section) {
+            return `${course.name} Sección ${section.name}`;
+          }
+        }
+        
+        // Si no encontramos sección del estudiante, buscar por courseId en secciones
+        const sectionForCourse = sections.find((s: any) => s.courseId === courseId || s.courseId === course.id);
+        if (sectionForCourse) {
+          return `${course.name} Sección ${sectionForCourse.name}`;
+        }
+        
+        return course.name;
+      }
+      
+      // Si no es UUID, puede ser el nombre ya
+      if (!courseId.includes('-') || courseId.length < 30) {
+        return courseId; // Ya es un nombre legible
+      }
+      
+      return courseId;
+    } catch (e) {
+      console.warn('Error getting course name:', e);
+      return courseId;
+    }
+  };
+
   // Detectar el tipo de asignatura para mostrar icono apropiado
   const subjectIcon = useMemo(() => {
     const s = `${selectedBook || ''} ${selectedSubject || ''}`.toLowerCase();
@@ -820,10 +879,15 @@ export default function EvaluacionPage() {
                   window.dispatchEvent(new Event('taskNotificationsUpdated'));
                   console.log('✅ Evaluation completion notification created for teacher');
                   
-                  // 📧 NUEVO: Enviar email al apoderado cuando el estudiante termina la evaluación
+                  // 📧 ENVIAR EMAIL AL ESTUDIANTE Y APODERADO cuando el estudiante termina la evaluación
                   try {
                     const currentYear = new Date().getFullYear();
                     const studentId = (user as any).id || user.username;
+                    
+                    // Destinatarios: incluir al estudiante
+                    const recipientIds: string[] = [studentId];
+                    
+                    // Buscar apoderados
                     let guardianIds: string[] = [];
                     
                     // Método 1: Buscar en smart-student-guardians-{year}
@@ -842,7 +906,7 @@ export default function EvaluacionPage() {
                         const guardianIdsFromRelations = guardianRelations
                           .filter((r: any) => r.studentId === studentId)
                           .map((r: any) => r.guardianId);
-                        guardianIds = [...new Set(guardianIdsFromRelations)];
+                        guardianIds = [...new Set(guardianIdsFromRelations)] as string[];
                         console.log(`📧 [EVALUACIÓN] Apoderados por relaciones: ${guardianIds.length}`);
                       }
                     }
@@ -866,30 +930,52 @@ export default function EvaluacionPage() {
                       }
                     }
                     
-                    if (guardianIds.length > 0) {
-                      console.log(`📧 [EVALUACIÓN] Enviando email a ${guardianIds.length} apoderado(s)`);
-                      sendEmailOnNotification(
-                        'evaluation_completed',
-                        guardianIds,
-                        {
-                          title: `${studentDisplayName} ha completado una evaluación`,
-                          content: `${studentDisplayName} ha completado la evaluación "${currentTask.title || evaluationTitle}" con un resultado de ${finalScore}/${totalQuestions} (${Math.round(percentage)}%)`,
+                    // Agregar apoderados a los destinatarios
+                    recipientIds.push(...guardianIds);
+                    
+                    console.log(`📧 [EVALUACIÓN] Enviando email a ${recipientIds.length} destinatario(s) (1 estudiante + ${guardianIds.length} apoderados)`);
+                    
+                    // Obtener nombre legible del curso CON SECCIÓN
+                    const courseDisplayName = getCourseDisplayName(selectedCourse);
+                    
+                    // Generar mensaje motivador basado en el porcentaje
+                    const pct = Math.round(percentage);
+                    let motivationalMessage = '';
+                    if (pct >= 90) {
+                      motivationalMessage = '🌟 ¡Excelente trabajo! Has demostrado un dominio sobresaliente del tema. ¡Sigue así!';
+                    } else if (pct >= 80) {
+                      motivationalMessage = '🎯 ¡Muy bien! Has logrado un gran resultado. Estás muy cerca de la excelencia.';
+                    } else if (pct >= 70) {
+                      motivationalMessage = '👍 ¡Buen trabajo! Has aprobado con un buen resultado. Con un poco más de práctica llegarás aún más lejos.';
+                    } else if (pct >= 60) {
+                      motivationalMessage = '✅ ¡Lo lograste! Has aprobado la evaluación. Sigue esforzándote para mejorar.';
+                    } else if (pct >= 50) {
+                      motivationalMessage = '💪 Estás cerca de aprobar. Repasa los temas y no te rindas, ¡tú puedes!';
+                    } else if (pct >= 30) {
+                      motivationalMessage = '📚 Necesitas repasar algunos temas. No te desanimes, cada intento es una oportunidad de aprender.';
+                    } else {
+                      motivationalMessage = '🌱 Este es solo el comienzo. Revisa el material y vuelve a intentarlo. ¡El esfuerzo siempre da frutos!';
+                    }
+                    
+                    sendEmailOnNotification(
+                      'evaluation_completed',
+                      recipientIds,
+                      {
+                        title: `${studentDisplayName} ha completado una evaluación`,
+                        content: `${studentDisplayName} ha completado la evaluación "${currentTask.title || evaluationTitle}" con un resultado de ${finalScore}/${totalQuestions} (${pct}%)`,
                           taskTitle: currentTask.title || evaluationTitle,
                           senderName: 'Smart Student',
-                          courseName: selectedCourse,
-                          grade: finalScore,
-                          feedback: `Porcentaje: ${Math.round(percentage)}%`
+                          courseName: courseDisplayName,
+                          grade: pct, // CORREGIDO: Enviar porcentaje, no respuestas correctas
+                          feedback: motivationalMessage // CORREGIDO: Mensaje motivador
                         }
                       ).then(() => {
-                        console.log(`📧 [EVALUACIÓN] Email enviado a apoderados exitosamente`);
+                        console.log(`📧 [EVALUACIÓN] Email enviado exitosamente a ${recipientIds.length} destinatarios`);
                       }).catch((emailError) => {
-                        console.warn('⚠️ [EVALUACIÓN] Error enviando email a apoderados:', emailError);
+                        console.warn('⚠️ [EVALUACIÓN] Error enviando email:', emailError);
                       });
-                    } else {
-                      console.log('📧 [EVALUACIÓN] No se encontraron apoderados para el estudiante');
-                    }
                   } catch (emailError) {
-                    console.warn('⚠️ [EVALUACIÓN] Error en envío de email a apoderados:', emailError);
+                    console.warn('⚠️ [EVALUACIÓN] Error en envío de email:', emailError);
                   }
                 } else {
                   console.log('ℹ️ No task found, skipping teacher notification');

@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button"
 import { useLanguage } from "@/contexts/language-context"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Input } from "@/components/ui/input"
+import { sendEmailOnNotification } from "@/services/email-notification.service"
 
 type QuestionTF = { id: string; type: "tf"; text: string; answer: boolean; explanation?: string }
 type QuestionMC = { id: string; type: "mc"; text: string; options: string[]; correctIndex: number }
@@ -1662,6 +1663,67 @@ function upsertTestGrade(input: { testId: string; studentId: string; studentName
     // Prefer session to save quota during heavy imports from OCR
     LocalStorageManager.setTestGradesForYear(year, list, { preferSession: true });
     try { window.dispatchEvent(new StorageEvent('storage', { key, newValue: JSON.stringify(list) })) } catch {}
+    
+    // 📧 NUEVO: Enviar email al estudiante y apoderado cuando se califica una prueba
+    try {
+      const recipientIds: string[] = [input.studentId];
+      
+      // Buscar apoderados del estudiante
+      // Método 1: smart-student-guardians-{year}
+      const guardiansForYear = JSON.parse(localStorage.getItem(`smart-student-guardians-${year}`) || '[]');
+      let guardianIds: string[] = [];
+      
+      if (guardiansForYear.length > 0) {
+        guardianIds = guardiansForYear
+          .filter((g: any) => g.studentIds?.includes(input.studentId))
+          .map((g: any) => g.id);
+        console.log(`📧 [PRUEBA CALIFICADA] Apoderados por guardians-year: ${guardianIds.length}`);
+      }
+      
+      // Método 2: smart-student-users (fallback)
+      if (guardianIds.length === 0) {
+        const storedUsers = localStorage.getItem('smart-student-users');
+        if (storedUsers) {
+          const allUsers = JSON.parse(storedUsers);
+          guardianIds = allUsers
+            .filter((u: any) => 
+              u.role === 'guardian' && 
+              (u.assignedStudents?.includes(input.studentId) ||
+               u.studentIds?.includes(input.studentId) ||
+               u.children?.includes(input.studentId))
+            )
+            .map((u: any) => u.id);
+          console.log(`📧 [PRUEBA CALIFICADA] Apoderados por users: ${guardianIds.length}`);
+        }
+      }
+      
+      recipientIds.push(...guardianIds);
+      
+      console.log(`📧 [PRUEBA CALIFICADA] Enviando email a ${recipientIds.length} destinatario(s) (1 estudiante + ${guardianIds.length} apoderados)`);
+      
+      // Obtener nombre legible del curso en lugar del ID
+      const courseDisplayName = resolveCourseSectionLabel(input.courseId, input.sectionId);
+      
+      sendEmailOnNotification(
+        'grade_published',
+        recipientIds,
+        {
+          title: `Tu prueba "${input.title || 'Prueba'}" ha sido calificada`,
+          content: `Tu prueba ha sido revisada y calificada con un puntaje de ${rec.score}%.`,
+          taskTitle: input.title || 'Prueba',
+          senderName: 'Profesor',
+          courseName: courseDisplayName || input.courseId || '',
+          grade: rec.score,
+          feedback: `Puntaje: ${rec.score}%`
+        }
+      ).then(() => {
+        console.log(`📧 [PRUEBA CALIFICADA] Email enviado exitosamente`);
+      }).catch((emailError) => {
+        console.warn('⚠️ [PRUEBA CALIFICADA] Error enviando email:', emailError);
+      });
+    } catch (emailError) {
+      console.warn('⚠️ [PRUEBA CALIFICADA] Error en envío de email:', emailError);
+    }
   } catch (e) {
     console.warn('[TestReview] upsertTestGrade error:', e);
   }

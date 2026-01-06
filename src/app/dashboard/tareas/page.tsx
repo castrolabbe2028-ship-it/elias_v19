@@ -883,8 +883,10 @@
         const courses = JSON.parse(localStorage.getItem('smart-student-courses') || '[]');
         const sections = JSON.parse(localStorage.getItem('smart-student-sections') || '[]');
         const availableCourses = getAvailableCoursesWithNames();
+        const currentYear = new Date().getFullYear();
+        const students = JSON.parse(localStorage.getItem(`smart-student-students-${currentYear}`) || '[]');
         
-        // Método 1: Buscar en cursos disponibles (más completo)
+        // Método 1: Buscar en cursos disponibles (más completo - ya incluye sección)
         const foundCourse = availableCourses.find(c => c.id === courseCode || c.courseId === courseCode);
         if (foundCourse && foundCourse.name) {
           return foundCourse.name;
@@ -909,6 +911,23 @@
         // Método 3: Buscar solo por courseId si no es compuesto
         const course = courses.find((c: any) => c.id === courseCode);
         if (course) {
+          // Intentar obtener la sección del estudiante actual
+          const studentId = (user as any)?.id || user?.username;
+          const student = students.find((s: any) => s.id === studentId || s.username === studentId);
+          
+          if (student?.sectionId) {
+            const section = sections.find((s: any) => s.id === student.sectionId);
+            if (section) {
+              return `${course.name} ${translate('userManagementSection')} ${section.name}`;
+            }
+          }
+          
+          // Si no encontramos sección del estudiante, buscar por courseId en secciones
+          const sectionForCourse = sections.find((s: any) => s.courseId === courseCode || s.courseId === course.id);
+          if (sectionForCourse) {
+            return `${course.name} ${translate('userManagementSection')} ${sectionForCourse.name}`;
+          }
+          
           return course.name;
         }
         
@@ -2356,7 +2375,7 @@
           if (studentsForYear.length > 0) {
             console.log(`📧 [TAREAS] Buscando estudiantes del año ${currentYear}: ${studentsForYear.length} total`);
             
-            const sectionId = derivedSectionId || selectedSection?.id;
+            const sectionId = derivedSectionId || selectedCourse?.sectionId;
             const courseId = actualCourseId;
             
             // Buscar por sectionId primero (más preciso)
@@ -2387,7 +2406,7 @@
               const allUsers = JSON.parse(storedUsers);
               
               // Buscar estudiantes por sectionId en las asignaciones
-              const sectionId = selectedSection?.id;
+              const sectionId = selectedCourse?.sectionId;
               const courseId = actualCourseId;
               
               let studentsInSection = allAssignments
@@ -2480,6 +2499,9 @@
         console.log(`📧 [TAREAS] Total recipients finales:`, recipientIds.length);
         
         if (recipientIds.length > 0) {
+          // Obtener el nombre de la sección desde selectedCourse
+          const sectionName = selectedCourse?.sectionName || selectedCourse?.name?.split(' Sección ')?.[1] || '';
+          
           // Usar .then/.catch en lugar de await para evitar requerir async
           sendEmailOnNotification(
             formData.taskType === 'evaluacion' ? 'evaluation_assigned' : 'task_assigned',
@@ -2489,8 +2511,8 @@
               content: formData.description || `Se ha asignado ${formData.taskType === 'evaluacion' ? 'una nueva evaluación' : 'una nueva tarea'}: ${formData.title}`,
               taskTitle: formData.title,
               senderName: user?.displayName || user?.username || 'Profesor',
-              courseName: selectedCourse?.name || formData.course,
-              sectionName: selectedSection?.name
+              courseName: selectedCourse?.originalCourseName || selectedCourse?.name || formData.course,
+              sectionName: sectionName
             }
           ).then(() => {
             console.log(`📧 [TAREAS] Email notifications sent to ${recipientIds.length} recipients`);
@@ -3225,6 +3247,91 @@
       
       // 🔥 NUEVO: Disparar evento para actualizar tareas pendientes
       window.dispatchEvent(new CustomEvent('pendingTasksUpdated'));
+      
+      // 📧 ENVIAR EMAIL AL ESTUDIANTE Y APODERADO cuando el estudiante completa una evaluación tipo tarea
+      try {
+        const currentYear = new Date().getFullYear();
+        const studentId = (user as any)?.id || user?.username;
+        const studentDisplayName = user?.displayName || user?.username || 'Estudiante';
+        
+        // Destinatarios: incluir al estudiante
+        const recipientIds: string[] = [studentId];
+        
+        // Buscar apoderados
+        let guardianIds: string[] = [];
+        
+        // Método 1: Buscar en smart-student-guardians-{year}
+        const guardiansForYear = JSON.parse(localStorage.getItem(`smart-student-guardians-${currentYear}`) || '[]');
+        if (guardiansForYear.length > 0) {
+          guardianIds = guardiansForYear
+            .filter((g: any) => g.studentIds?.includes(studentId))
+            .map((g: any) => g.id);
+          console.log(`📧 [EVALUACIÓN TAREA] Apoderados por guardians-year: ${guardianIds.length}`);
+        }
+        
+        // Método 2: Buscar en smart-student-users (fallback)
+        if (guardianIds.length === 0) {
+          const storedUsers = localStorage.getItem('smart-student-users');
+          if (storedUsers) {
+            const allUsers = JSON.parse(storedUsers);
+            guardianIds = allUsers
+              .filter((u: any) => 
+                u.role === 'guardian' && 
+                (u.assignedStudents?.includes(studentId) ||
+                 u.studentIds?.includes(studentId) ||
+                 u.children?.includes(studentId))
+              )
+              .map((u: any) => u.id);
+            console.log(`📧 [EVALUACIÓN TAREA] Apoderados por users: ${guardianIds.length}`);
+          }
+        }
+        
+        // Agregar apoderados a los destinatarios
+        recipientIds.push(...guardianIds);
+        
+        console.log(`📧 [EVALUACIÓN TAREA] Enviando email a ${recipientIds.length} destinatario(s) (1 estudiante + ${guardianIds.length} apoderados)`);
+        
+        // Obtener nombre legible del curso CON SECCIÓN
+        const courseDisplayName = getCourseAndSectionName(currentEvaluation.task.course);
+        
+        // Generar mensaje motivador basado en el porcentaje
+        let motivationalMessage = '';
+        if (percentage >= 90) {
+          motivationalMessage = '🌟 ¡Excelente trabajo! Has demostrado un dominio sobresaliente del tema. ¡Sigue así!';
+        } else if (percentage >= 80) {
+          motivationalMessage = '🎯 ¡Muy bien! Has logrado un gran resultado. Estás muy cerca de la excelencia.';
+        } else if (percentage >= 70) {
+          motivationalMessage = '👍 ¡Buen trabajo! Has aprobado con un buen resultado. Con un poco más de práctica llegarás aún más lejos.';
+        } else if (percentage >= 60) {
+          motivationalMessage = '✅ ¡Lo lograste! Has aprobado la evaluación. Sigue esforzándote para mejorar.';
+        } else if (percentage >= 50) {
+          motivationalMessage = '💪 Estás cerca de aprobar. Repasa los temas y no te rindas, ¡tú puedes!';
+        } else if (percentage >= 30) {
+          motivationalMessage = '📚 Necesitas repasar algunos temas. No te desanimes, cada intento es una oportunidad de aprender.';
+        } else {
+          motivationalMessage = '🌱 Este es solo el comienzo. Revisa el material y vuelve a intentarlo. ¡El esfuerzo siempre da frutos!';
+        }
+        
+        sendEmailOnNotification(
+          'evaluation_completed',
+          recipientIds,
+          {
+            title: `${studentDisplayName} ha completado una evaluación`,
+            content: `${studentDisplayName} ha completado la evaluación "${currentEvaluation.task.title}" con un resultado de ${correctAnswers}/${totalQuestions} (${percentage}%)`,
+            taskTitle: currentEvaluation.task.title,
+            senderName: 'Smart Student',
+            courseName: courseDisplayName,
+            grade: percentage, // CORREGIDO: Enviar porcentaje, no respuestas correctas
+            feedback: motivationalMessage // CORREGIDO: Mensaje motivador en lugar de solo porcentaje
+          }
+        ).then(() => {
+          console.log(`📧 [EVALUACIÓN TAREA] Email enviado exitosamente a ${recipientIds.length} destinatarios`);
+        }).catch((emailError) => {
+          console.warn('⚠️ [EVALUACIÓN TAREA] Error enviando email:', emailError);
+        });
+      } catch (emailError) {
+        console.warn('⚠️ [EVALUACIÓN TAREA] Error en envío de email:', emailError);
+      }
       
       console.log('🎯 [handleCompleteEvaluation] Events dispatched: taskNotificationsUpdated, pendingTasksUpdated');
 
@@ -4056,6 +4163,9 @@
           // Determinar si es evaluación o tarea para el tipo de email
           const isEvaluation = selectedTask.taskType === 'evaluacion' || selectedTask.taskType === 'evaluation';
           
+          // Obtener nombre legible del curso en lugar del ID
+          const courseDisplayName = getCourseAndSectionName(selectedTask.course);
+          
           sendEmailOnNotification(
             isEvaluation ? 'evaluation_graded' : 'task_graded',
             recipientIds,
@@ -4064,7 +4174,7 @@
               content: gradeForm.teacherComment.trim() || `Tu ${isEvaluation ? 'evaluación' : 'tarea'} ha sido revisada y calificada.`,
               taskTitle: selectedTask.title,
               senderName: user?.displayName || user?.username || 'Profesor',
-              courseName: selectedTask.course,
+              courseName: courseDisplayName,
               grade: grade,
               feedback: gradeForm.teacherComment.trim()
             }
@@ -4324,6 +4434,70 @@
       const existingNotifications = JSON.parse(localStorage.getItem('smart-student-notifications') || '[]');
       const updatedNotifications = [...existingNotifications, notification];
       localStorage.setItem('smart-student-notifications', JSON.stringify(updatedNotifications));
+      
+      // 📧 ENVIAR EMAIL AL ESTUDIANTE Y APODERADO cuando se califica la tarea
+      try {
+        const recipientIds: string[] = [currentReview.studentId];
+        const currentYear = new Date().getFullYear();
+        
+        // Buscar apoderados del estudiante
+        // Método 1: smart-student-guardians-{year}
+        const guardiansForYear = JSON.parse(localStorage.getItem(`smart-student-guardians-${currentYear}`) || '[]');
+        let guardianIds: string[] = [];
+        
+        if (guardiansForYear.length > 0) {
+          guardianIds = guardiansForYear
+            .filter((g: any) => g.studentIds?.includes(currentReview.studentId))
+            .map((g: any) => g.id);
+          console.log(`📧 [TAREA CALIFICADA] Apoderados por guardians-year: ${guardianIds.length}`);
+        }
+        
+        // Método 2: smart-student-users (fallback)
+        if (guardianIds.length === 0) {
+          const storedUsers = localStorage.getItem('smart-student-users');
+          if (storedUsers) {
+            const allUsers = JSON.parse(storedUsers);
+            guardianIds = allUsers
+              .filter((u: any) => 
+                u.role === 'guardian' && 
+                (u.assignedStudents?.includes(currentReview.studentId) ||
+                 u.studentIds?.includes(currentReview.studentId) ||
+                 u.children?.includes(currentReview.studentId))
+              )
+              .map((u: any) => u.id);
+            console.log(`📧 [TAREA CALIFICADA] Apoderados por users: ${guardianIds.length}`);
+          }
+        }
+        
+        recipientIds.push(...guardianIds);
+        
+        console.log(`📧 [TAREA CALIFICADA] Enviando email a ${recipientIds.length} destinatario(s)`);
+        
+        const isEvaluation = selectedTask.taskType === 'evaluacion' || selectedTask.taskType === 'evaluation';
+        
+        // Obtener nombre legible del curso en lugar del ID
+        const courseDisplayName = getCourseAndSectionName(selectedTask.course);
+        
+        sendEmailOnNotification(
+          isEvaluation ? 'evaluation_graded' : 'task_graded',
+          recipientIds,
+          {
+            title: `Tu ${isEvaluation ? 'evaluación' : 'tarea'} "${selectedTask.title}" ha sido calificada`,
+            content: currentReview.feedback || `Tu ${isEvaluation ? 'evaluación' : 'tarea'} ha sido revisada y calificada.`,
+            taskTitle: selectedTask.title,
+            senderName: user?.displayName || user?.username || 'Profesor',
+            courseName: courseDisplayName,
+            grade: currentReview.grade,
+            feedback: currentReview.feedback
+          }
+        ).then(() => {
+          console.log(`📧 [TAREA CALIFICADA] Email enviado exitosamente`);
+        }).catch((emailError) => {
+          console.warn('⚠️ [TAREA CALIFICADA] Error enviando email:', emailError);
+        });
+      } catch (emailError) {
+        console.warn('⚠️ [TAREA CALIFICADA] Error en envío de email:', emailError);
+      }
       
       toast({
         title: 'Tarea Calificada',
