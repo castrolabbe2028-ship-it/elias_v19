@@ -1802,7 +1802,7 @@
       }
       
       console.log(`🔍 [isStudentAssignedToTask] Verificando acceso para estudiante ${studentUsername} (ID: ${studentId}) a tarea "${task.title}"`);
-      console.log(`📋 [isStudentAssignedToTask] Tarea asignada a: ${task.assignedTo}, curso: ${task.course || task.courseSectionId}`);
+      console.log(`📋 [isStudentAssignedToTask] Tarea asignada a: ${task.assignedTo}, curso: ${task.course || task.courseSectionId}, sectionId: ${task.sectionId}`);
       
       // Si la tarea está asignada a estudiantes específicos
       if (task.assignedTo === 'student' && task.assignedStudentIds) {
@@ -1813,15 +1813,72 @@
       
       // Si la tarea está asignada a todo el curso
       if (task.assignedTo === 'course') {
-        // Verificar que el estudiante pertenezca al mismo curso y sección de la tarea
         const taskCourseId = task.courseSectionId || task.course;
+        const taskSectionId = task.sectionId;
         
-        if (!taskCourseId) {
-          console.log(`⚠️ [isStudentAssignedToTask] Tarea sin courseId definido`);
+        if (!taskCourseId && !taskSectionId) {
+          console.log(`⚠️ [isStudentAssignedToTask] Tarea sin courseId ni sectionId definido`);
           return false;
         }
         
-        // Obtener información del estudiante actual
+        // 🆕 MÉTODO PRINCIPAL: Usar smart-student-students-{year} con sectionId
+        const currentYear = new Date().getFullYear();
+        const studentsForYear = JSON.parse(localStorage.getItem(`smart-student-students-${currentYear}`) || '[]');
+        
+        if (studentsForYear.length > 0 && taskSectionId) {
+          // Buscar al estudiante actual en students-year
+          const studentInYear = studentsForYear.find((s: any) => 
+            s.id === studentId || s.username === studentUsername
+          );
+          
+          if (studentInYear) {
+            const isInSameSection = String(studentInYear.sectionId) === String(taskSectionId);
+            console.log(`🎯 [MÉTODO PRINCIPAL] Estudiante ${studentUsername} sectionId: "${studentInYear.sectionId}", tarea sectionId: "${taskSectionId}"`);
+            console.log(`✅ [MÉTODO PRINCIPAL] ¿Mismo sección?: ${isInSameSection ? '✅ SÍ' : '❌ NO'}`);
+            
+            if (isInSameSection) {
+              return true;
+            }
+          } else {
+            console.log(`⚠️ [MÉTODO PRINCIPAL] Estudiante ${studentUsername} no encontrado en students-${currentYear}`);
+          }
+        }
+        
+        // 🆕 MÉTODO ALTERNATIVO: Extraer sectionId del courseSectionId si task.sectionId no existe
+        if (!taskSectionId && taskCourseId && taskCourseId.includes('-') && taskCourseId.length > 40) {
+          console.log(`🔄 [MÉTODO ALTERNATIVO] Extrayendo sectionId del courseSectionId...`);
+          
+          // Extraer sectionId del ID combinado
+          const guidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+          const parts = taskCourseId.split('-');
+          let extractedSectionId = '';
+          
+          for (let i = 5; i < parts.length - 4; i++) {
+            const testSectionId = parts.slice(i).join('-');
+            if (guidPattern.test(testSectionId)) {
+              extractedSectionId = testSectionId;
+              break;
+            }
+          }
+          
+          if (extractedSectionId && studentsForYear.length > 0) {
+            const studentInYear = studentsForYear.find((s: any) => 
+              s.id === studentId || s.username === studentUsername
+            );
+            
+            if (studentInYear) {
+              const isInSameSection = String(studentInYear.sectionId) === String(extractedSectionId);
+              console.log(`🎯 [MÉTODO ALTERNATIVO] Estudiante sectionId: "${studentInYear.sectionId}", extraído: "${extractedSectionId}"`);
+              
+              if (isInSameSection) {
+                console.log(`✅ [MÉTODO ALTERNATIVO] Estudiante está en la misma sección`);
+                return true;
+              }
+            }
+          }
+        }
+        
+        // MÉTODO LEGACY: Obtener información del estudiante de users
         const usersText = localStorage.getItem('smart-student-users');
         const allUsers: ExtendedUser[] = usersText ? JSON.parse(usersText) : [];
         const studentData = allUsers.find(u => u.id === studentId || u.username === studentUsername);
@@ -1831,31 +1888,30 @@
           return false;
         }
         
-        // Verificar usando el sistema de asignaciones dinámicas
+        // Verificar usando el sistema de asignaciones dinámicas (si existe)
         const studentAssignments = JSON.parse(localStorage.getItem('smart-student-student-assignments') || '[]');
         
-        // 🔧 CORRECCIÓN: Usar función auxiliar en lugar de getAvailableCoursesWithNames()
-        // Esto resuelve el problema donde getAvailableCoursesWithNames() solo funciona para profesores
-        const taskCourseData = getCourseDataFromCombinedId(taskCourseId);
-        
-        if (taskCourseData) {
-          const { sectionId, courseId: actualCourseId } = taskCourseData;
+        if (studentAssignments.length > 0) {
+          // 🔧 CORRECCIÓN: Usar función auxiliar en lugar de getAvailableCoursesWithNames()
+          const taskCourseData = getCourseDataFromCombinedId(taskCourseId);
           
-          // Verificar si el estudiante está asignado al mismo curso Y sección
-          const isAssignedToTaskSection = studentAssignments.some(assignment => 
-            assignment.studentId === studentId && 
-            assignment.sectionId === sectionId && 
-            assignment.courseId === actualCourseId
-          );
-          
-          console.log(`🏫 [isStudentAssignedToTask] Verificando curso ${actualCourseId} sección ${sectionId}`);
-          console.log(`📊 [isStudentAssignedToTask] Estudiante ${studentUsername} asignado a esta sección: ${isAssignedToTaskSection ? '✅' : '❌'}`);
-          
-          if (isAssignedToTaskSection) {
-            return true;
+          if (taskCourseData) {
+            const { sectionId, courseId: actualCourseId } = taskCourseData;
+            
+            // Verificar si el estudiante está asignado al mismo curso Y sección
+            const isAssignedToTaskSection = studentAssignments.some((assignment: any) => 
+              assignment.studentId === studentId && 
+              assignment.sectionId === sectionId && 
+              assignment.courseId === actualCourseId
+            );
+            
+            console.log(`🏫 [LEGACY] Verificando curso ${actualCourseId} sección ${sectionId}`);
+            console.log(`📊 [LEGACY] Estudiante ${studentUsername} asignado a esta sección: ${isAssignedToTaskSection ? '✅' : '❌'}`);
+            
+            if (isAssignedToTaskSection) {
+              return true;
+            }
           }
-        } else {
-          console.log(`❌ [isStudentAssignedToTask] No se pudo obtener datos del curso para: ${taskCourseId}`);
         }
         
         // Fallback: verificar por activeCourses (sistema legacy)

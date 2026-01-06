@@ -838,9 +838,12 @@ export class TaskNotificationManager {
     // 🔧 USAR LA MISMA LÓGICA QUE EN LA PÁGINA DE TAREAS PARA COMPATIBILIDAD COMPLETA
     const allUsers: any[] = JSON.parse(localStorage.getItem('smart-student-users') || '[]');
     const studentAssignments: any[] = JSON.parse(localStorage.getItem('smart-student-student-assignments') || '[]');
+    const currentYear = new Date().getFullYear();
+    const studentsForYear: any[] = JSON.parse(localStorage.getItem(`smart-student-students-${currentYear}`) || '[]');
     
     console.log(`� [getStudentsInCourse] Total users in system: ${allUsers.length}`);
     console.log(`📋 [getStudentsInCourse] Total student assignments: ${studentAssignments.length}`);
+    console.log(`📋 [getStudentsInCourse] Students for year ${currentYear}: ${studentsForYear.length}`);
     
     // 🔧 NUEVA LÓGICA: Usar getCourseDataFromCombinedId para manejar IDs combinados
     const courseData = this.getCourseDataFromCombinedId(course);
@@ -853,14 +856,41 @@ export class TaskNotificationManager {
     const { courseId, sectionId } = courseData;
     console.log(`� [getStudentsInCourse] Parsed course - CourseId: ${courseId}, SectionId: ${sectionId}`);
     
-    // Obtener estudiantes asignados a este curso y sección específicos
+    // 🆕 MÉTODO PRINCIPAL: Usar smart-student-students-{year} que tiene sectionId
+    if (studentsForYear.length > 0 && sectionId) {
+      let estudiantesEncontrados = studentsForYear.filter((s: any) => 
+        String(s.sectionId) === String(sectionId)
+      );
+      console.log(`🎯 [MÉTODO PRINCIPAL] Estudiantes por sectionId "${sectionId}": ${estudiantesEncontrados.length}`);
+      
+      // Fallback: buscar por courseId
+      if (estudiantesEncontrados.length === 0) {
+        estudiantesEncontrados = studentsForYear.filter((s: any) => 
+          String(s.courseId) === String(courseId)
+        );
+        console.log(`🔍 [MÉTODO PRINCIPAL] Fallback por courseId "${courseId}": ${estudiantesEncontrados.length}`);
+      }
+      
+      if (estudiantesEncontrados.length > 0) {
+        const resultado = estudiantesEncontrados.map((estudiante: any) => ({
+          username: estudiante.username || estudiante.rut || `student-${estudiante.id}`,
+          displayName: estudiante.displayName || estudiante.name || estudiante.username || 'Estudiante'
+        }));
+        
+        console.log(`✅ [MÉTODO PRINCIPAL] Encontrados ${resultado.length} estudiantes por students-year`);
+        resultado.forEach((e, i) => console.log(`   ${i + 1}. ${e.username} (${e.displayName})`));
+        return resultado;
+      }
+    }
+    
+    // MÉTODO LEGACY: Obtener estudiantes asignados a este curso y sección específicos
     const assignedStudentIds = studentAssignments
       .filter((assignment: any) => 
         assignment.courseId === courseId && assignment.sectionId === sectionId
       )
       .map((assignment: any) => assignment.studentId);
     
-    console.log(`🎯 [getStudentsInCourse] Student IDs assigned to course-section: ${assignedStudentIds.length}`, assignedStudentIds);
+    console.log(`🎯 [MÉTODO LEGACY] Student IDs assigned to course-section: ${assignedStudentIds.length}`, assignedStudentIds);
     
     // Obtener datos completos de los estudiantes asignados
     const studentsInCourse = assignedStudentIds
@@ -876,7 +906,7 @@ export class TaskNotificationManager {
       })
       .filter((student: any): student is {username: string, displayName: string} => student !== null);
     
-    console.log(`🎯 [getStudentsInCourse] Students found in "${course}": ${studentsInCourse.length}`);
+    console.log(`🎯 [MÉTODO LEGACY] Students found in "${course}": ${studentsInCourse.length}`);
     studentsInCourse.forEach((student, index) => {
       console.log(`   ${index + 1}. ${student.username} (${student.displayName})`);
     });
@@ -910,7 +940,33 @@ export class TaskNotificationManager {
       console.log(`[getCourseDataFromCombinedId] ⚠️ ID simple detectado: "${combinedId}"`);
       console.warn(`[getCourseDataFromCombinedId] ⚠️ ID simple puede causar notificaciones incorrectas`);
       
-      // 🚨 NUEVA VALIDACIÓN: Solo proceder si hay UNA ÚNICA sección para este curso
+      // 🆕 MÉTODO PRINCIPAL: Buscar en students-year primero
+      const currentYear = new Date().getFullYear();
+      const studentsForYear = JSON.parse(localStorage.getItem(`smart-student-students-${currentYear}`) || '[]');
+      
+      if (studentsForYear.length > 0) {
+        // Buscar secciones únicas para este courseId en students-year
+        const studentsWithCourse = studentsForYear.filter((s: any) => 
+          String(s.courseId) === String(combinedId)
+        );
+        
+        if (studentsWithCourse.length > 0) {
+          const uniqueSections = [...new Set(studentsWithCourse.map((s: any) => s.sectionId).filter(Boolean))];
+          
+          if (uniqueSections.length === 1) {
+            const sectionId = uniqueSections[0] as string;
+            console.log(`[getCourseDataFromCombinedId] ✅ [STUDENTS-YEAR] Solo una sección encontrada: "${sectionId}"`);
+            return { courseId: combinedId, sectionId };
+          } else if (uniqueSections.length > 1) {
+            console.warn(`[getCourseDataFromCombinedId] ⚠️ Múltiples secciones en students-year: ${uniqueSections.join(', ')}`);
+            // Usar la primera sección (puede no ser ideal pero permite continuar)
+            const sectionId = uniqueSections[0] as string;
+            return { courseId: combinedId, sectionId };
+          }
+        }
+      }
+      
+      // MÉTODO LEGACY: Buscar en student-assignments
       const studentAssignments = JSON.parse(localStorage.getItem('smart-student-student-assignments') || '[]');
       const assignmentsForCourse = studentAssignments.filter((assignment: any) => assignment.courseId === combinedId);
       
