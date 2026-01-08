@@ -50,7 +50,7 @@ export async function POST(request: NextRequest) {
 
     const totalQuestions = Array.isArray(questions) ? questions.length : 0;
 
-    // 3. PROMPT MEJORADO - ANTI-OMISIÓN
+    // 3. PROMPT MEJORADO - SOPORTA V/F, ALTERNATIVAS Y SELECCIÓN MÚLTIPLE
     const prompt = `
 ROL: Auditor Forense de Exámenes Escolares (Visión Artificial OMR).
 
@@ -61,36 +61,51 @@ ${focusLine}
 
 ${questionsContext}
 
-## 📋 PROTOCOLO DE DETECCIÓN SECUENCIAL:
+## 📋 TIPOS DE PREGUNTAS A DETECTAR:
 
-### PASO 1: LOCALIZAR TODAS LAS PREGUNTAS
+### TIPO 1: VERDADERO/FALSO (V/F)
+Formato: "V ( ) F ( )" o "Verdadero ( ) Falso ( )"
+- Marca en V → val = "V", type = "tf"
+- Marca en F → val = "F", type = "tf"
+
+### TIPO 2: ALTERNATIVAS / OPCIÓN MÚLTIPLE (A, B, C, D)
+Formato: "a) ( ) b) ( ) c) ( ) d) ( )" o "A. B. C. D."
+- Marca en A → val = "A", type = "mc"
+- Marca en B → val = "B", type = "mc"
+- Marca en C → val = "C", type = "mc"
+- Marca en D → val = "D", type = "mc"
+
+### TIPO 3: SELECCIÓN MÚLTIPLE (varias correctas)
+Igual que alternativas pero puede tener MÚLTIPLES marcas
+- Marcas en A y C → val = "A,C", type = "ms"
+- Marcas en B, C y D → val = "B,C,D", type = "ms"
+
+## 📋 PROTOCOLO DE DETECCIÓN:
+
+### PASO 1: LOCALIZAR Y CLASIFICAR PREGUNTAS
 - Escanea el documento de arriba a abajo
 - Identifica CADA pregunta numerada (1, 2, 3, 4, 5, ...)
-- Cuenta el total de preguntas
+- Determina el TIPO: ¿Es V/F o tiene alternativas A,B,C,D?
 
-### PASO 2: ANALIZAR CADA PREGUNTA INDIVIDUALMENTE
-Para CADA pregunta del 1 al último número:
-a) Localiza los paréntesis: V ( ) y F ( )
-b) Mira DENTRO de cada paréntesis
-c) ¿Hay una X, check o círculo? → ESA es la respuesta
-d) ¿Ambos vacíos? → val = null
+### PASO 2: ANALIZAR CADA PREGUNTA
+**Si es V/F:**
+- Localiza V ( ) y F ( )
+- ¿Cuál tiene marca? → val = "V" o "F"
+
+**Si es ALTERNATIVAS:**
+- Localiza a) b) c) d) o A. B. C. D.
+- ¿Cuál tiene marca (X, círculo, check)? → val = "A", "B", "C" o "D"
+- ¿Más de una marcada en opción simple? → val = null (invalidado)
+
+**Si es SELECCIÓN MÚLTIPLE:**
+- ¿Cuáles tienen marca? → val = "A,C" (separadas por coma)
 
 ### PASO 3: CLASIFICAR LA MARCA
-- "STRONG_X": X clara dentro del paréntesis → val = "V" o "F"
-- "CHECK": Check/palomita ✓ → val = "V" o "F"
-- "CIRCLE": Círculo alrededor → val = "V" o "F"
+- "STRONG_X": X clara → VÁLIDA
+- "CHECK": Check/palomita ✓ → VÁLIDA
+- "CIRCLE": Círculo alrededor → VÁLIDA
+- "FILL": Rellenado/sombreado → VÁLIDA
 - "EMPTY": Sin marca → val = null
-
-### REGLAS V/F:
-- "V (X) F ( )" → val = "V"
-- "V ( ) F (X)" → val = "F"
-- "V ( ) F ( )" → val = null (SIN RESPUESTA)
-
-### ⚠️ REGLA ANTI-OMISIÓN (MUY IMPORTANTE):
-- Si hay ${totalQuestions > 0 ? totalQuestions : 'N'} preguntas, DEBES devolver ${totalQuestions > 0 ? totalQuestions : 'N'} entradas en "answers"
-- EJEMPLO: Si pregunta 3 tiene "V (X)", DEBES incluir: {"q": 3, "evidence": "STRONG_X en V", "val": "V"}
-- NUNCA omitas una pregunta aunque "parezca similar" a otras
-- Si no ves marca clara en una pregunta → val = null (pero INCLÚYELA)
 
 ### DETECCIÓN DE ESTUDIANTE:
 - Busca "Nombre:", "Estudiante:" seguido de texto
@@ -102,20 +117,20 @@ d) ¿Ambos vacíos? → val = null
   "rut": "RUT detectado o null",
   "questionsFound": número_total_de_preguntas,
   "answers": [
-    { "q": 1, "evidence": "STRONG_X en paréntesis de F", "val": "F" },
-    { "q": 2, "evidence": "STRONG_X en paréntesis de V", "val": "V" },
-    { "q": 3, "evidence": "STRONG_X en paréntesis de V", "val": "V" },
-    { "q": 4, "evidence": "STRONG_X en paréntesis de F", "val": "F" },
-    { "q": 5, "evidence": "EMPTY - paréntesis vacíos", "val": null },
-    { "q": 6, "evidence": "STRONG_X en paréntesis de V", "val": "V" }
+    { "q": 1, "type": "tf", "evidence": "STRONG_X en V", "val": "V" },
+    { "q": 2, "type": "tf", "evidence": "STRONG_X en F", "val": "F" },
+    { "q": 3, "type": "mc", "evidence": "CIRCLE en opción B", "val": "B" },
+    { "q": 4, "type": "mc", "evidence": "STRONG_X en opción A", "val": "A" },
+    { "q": 5, "type": "ms", "evidence": "STRONG_X en A y C", "val": "A,C" },
+    { "q": 6, "type": "mc", "evidence": "EMPTY - sin marca", "val": null }
   ],
   "confidence": "High"
 }
 
 ## ⚠️ CHECKLIST ANTES DE RESPONDER:
 1. ¿Incluí TODAS las preguntas del 1 al ${totalQuestions > 0 ? totalQuestions : 'último'}? ✓
-2. ¿Cada pregunta tiene su entrada en "answers"? ✓
-3. ¿Las preguntas con marca tienen val = "V" o "F"? ✓
+2. ¿Identifiqué el TIPO correcto (tf/mc/ms)? ✓
+3. ¿Las alternativas están en MAYÚSCULA (A, B, C, D)? ✓
 4. ¿Las preguntas sin marca tienen val = null? ✓
 
 Devuelve SOLO JSON válido.

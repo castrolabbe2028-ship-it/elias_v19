@@ -72,39 +72,60 @@ Analiza VISUALMENTE cada página para detectar TODAS las preguntas visibles.
 ⚠️ CRÍTICO: DEBES REPORTAR CADA PREGUNTA INDIVIDUALMENTE, del 1 al ${qCount > 0 ? qCount : 'último número visible'}.
 NO AGRUPES, NO OMITAS, NO SALTES ninguna pregunta.
 
+## 📋 TIPOS DE PREGUNTAS A DETECTAR:
+
+### TIPO 1: VERDADERO/FALSO (V/F)
+Formato típico: "V ( ) F ( )" o "Verdadero ( ) Falso ( )"
+- Si ves marca en V → detected = "V", questionType = "tf"
+- Si ves marca en F → detected = "F", questionType = "tf"
+
+### TIPO 2: ALTERNATIVAS / OPCIÓN MÚLTIPLE (A, B, C, D)
+Formato típico: "a) ( ) b) ( ) c) ( ) d) ( )" o "A. B. C. D."
+- Si ves marca en A → detected = "A", questionType = "mc"
+- Si ves marca en B → detected = "B", questionType = "mc"
+- Si ves marca en C → detected = "C", questionType = "mc"
+- Si ves marca en D → detected = "D", questionType = "mc"
+- También puede haber E, F si hay más opciones
+
+### TIPO 3: SELECCIÓN MÚLTIPLE (varias correctas)
+Formato típico: Igual que alternativas pero puede tener MÚLTIPLES marcas válidas
+- Si ves marcas en A y C → detected = "A,C", questionType = "ms"
+- Si ves marcas en B, C y D → detected = "B,C,D", questionType = "ms"
+
 ## 📋 PROTOCOLO DE DETECCIÓN SECUENCIAL:
 
 ### PASO 1: ESCANEO VISUAL COMPLETO
 - Localiza TODAS las preguntas numeradas en el documento
+- Identifica el TIPO de cada pregunta (V/F, alternativas, selección múltiple)
 - Cuenta cuántas preguntas hay en total
-- Identifica la ubicación de cada una (arriba, medio, abajo de la página)
 
 ### PASO 2: ANÁLISIS PREGUNTA POR PREGUNTA
 Para CADA pregunta del 1 al último número:
+
+**Si es V/F:**
 a) Localiza los paréntesis de V ( ) y F ( )
-b) Mira DENTRO de cada paréntesis
-c) ¿Hay una X, check, círculo o relleno? → ESA es la respuesta
-d) ¿Ambos paréntesis están vacíos? → detected = null
+b) ¿Hay marca en V? → detected = "V"
+c) ¿Hay marca en F? → detected = "F"
+d) ¿Ambos vacíos? → detected = null
+
+**Si es ALTERNATIVAS (A,B,C,D):**
+a) Localiza las opciones a) b) c) d) o A. B. C. D.
+b) ¿Cuál tiene la marca (X, círculo, check)? → detected = "A", "B", "C" o "D"
+c) ¿Ninguna marcada? → detected = null
+d) ¿Más de una marcada? → detected = null (invalidado) para opción múltiple simple
+
+**Si es SELECCIÓN MÚLTIPLE:**
+a) Localiza todas las opciones
+b) ¿Cuáles tienen marca? → detected = "A,C" (separadas por coma, en orden alfabético)
+c) ¿Ninguna marcada? → detected = null
 
 ### PASO 3: CLASIFICACIÓN DE MARCAS:
-- "STRONG_X": Una X clara y fuerte dentro del paréntesis → VÁLIDA
-- "CHECK": Un check/palomita ✓ visible → VÁLIDA  
-- "CIRCLE": Círculo alrededor de V o F → VÁLIDA
-- "FILL": Paréntesis rellenado/sombreado → VÁLIDA
-- "EMPTY": Espacio en blanco, sin tinta → detected = null
-- "WEAK_MARK": Garabato pequeño o dudoso → detected = null
-
-### REGLAS PARA V/F:
-- "V (X) F ( )" → detected = "V"
-- "V ( ) F (X)" → detected = "F"  
-- "V ( ) F ( )" → detected = null (AMBOS VACÍOS)
-- "V (X) F (X)" → detected = null (DOBLE MARCA = INVALIDADO)
-
-### ⚠️ REGLA ANTI-OMISIÓN:
-- Si la prueba tiene ${qCount > 0 ? qCount : 'N'} preguntas, DEBES devolver ${qCount > 0 ? qCount : 'N'} entradas en "answers"
-- Si la pregunta 3 tiene "V (X)", DEBES incluirla: {"questionNum": 3, "detected": "V", ...}
-- NUNCA omitas una pregunta porque "parece similar" a otras
-- Cada pregunta es ÚNICA e INDEPENDIENTE
+- "STRONG_X": Una X clara y fuerte → VÁLIDA
+- "CHECK": Un check/palomita ✓ → VÁLIDA  
+- "CIRCLE": Círculo alrededor de la opción → VÁLIDA
+- "FILL": Opción rellenada/sombreada → VÁLIDA
+- "EMPTY": Sin marca → detected = null
+- "WEAK_MARK": Garabato dudoso → detected = null
 
 ### DETECCIÓN DE ESTUDIANTE:
 - Busca "Nombre:", "Estudiante:" en el encabezado
@@ -123,12 +144,12 @@ d) ¿Ambos paréntesis están vacíos? → detected = null
         "rut": "RUT o null"
       },
       "answers": [
-        {"questionNum": 1, "evidence": "STRONG_X en paréntesis de F", "detected": "F", "points": 5},
-        {"questionNum": 2, "evidence": "STRONG_X en paréntesis de V", "detected": "V", "points": 5},
-        {"questionNum": 3, "evidence": "STRONG_X en paréntesis de V", "detected": "V", "points": 5},
-        {"questionNum": 4, "evidence": "STRONG_X en paréntesis de V", "detected": "V", "points": 5},
-        {"questionNum": 5, "evidence": "STRONG_X en paréntesis de F", "detected": "F", "points": 5},
-        {"questionNum": 6, "evidence": "EMPTY - paréntesis vacíos", "detected": null, "points": null}
+        {"questionNum": 1, "questionType": "tf", "evidence": "STRONG_X en V", "detected": "V", "points": 5},
+        {"questionNum": 2, "questionType": "tf", "evidence": "STRONG_X en F", "detected": "F", "points": 5},
+        {"questionNum": 3, "questionType": "mc", "evidence": "CIRCLE en opción B", "detected": "B", "points": 5},
+        {"questionNum": 4, "questionType": "mc", "evidence": "STRONG_X en opción A", "detected": "A", "points": 5},
+        {"questionNum": 5, "questionType": "ms", "evidence": "STRONG_X en A y C", "detected": "A,C", "points": 5},
+        {"questionNum": 6, "questionType": "mc", "evidence": "EMPTY - sin marca", "detected": null, "points": null}
       ]
     }
   ]
@@ -136,10 +157,11 @@ d) ¿Ambos paréntesis están vacíos? → detected = null
 
 ## ⚠️ CHECKLIST FINAL ANTES DE RESPONDER:
 1. ¿Incluí TODAS las preguntas del 1 al último número? ✓
-2. ¿Cada pregunta tiene su entrada en "answers"? ✓
-3. ¿Las preguntas con marca tienen detected = "V" o "F"? ✓
-4. ¿Las preguntas sin marca tienen detected = null? ✓
-5. ¿El JSON es válido, sin texto adicional? ✓
+2. ¿Identifiqué correctamente el TIPO de cada pregunta (tf/mc/ms)? ✓
+3. ¿Las alternativas están en MAYÚSCULA (A, B, C, D)? ✓
+4. ¿Las selecciones múltiples están separadas por coma (A,C,D)? ✓
+5. ¿Las preguntas sin marca tienen detected = null? ✓
+6. ¿El JSON es válido, sin texto adicional? ✓
 
 Devuelve SOLO JSON válido, sin markdown ni explicaciones.
 `

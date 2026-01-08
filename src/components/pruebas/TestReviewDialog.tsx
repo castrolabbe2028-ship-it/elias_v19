@@ -2162,16 +2162,38 @@ export default function TestReviewDialog({ open, onOpenChange, test }: Props) {
                   {aiAnalysis.observations && (
                     <div className="mt-1 text-muted-foreground italic">{aiAnalysis.observations}</div>
                   )}
-                  {/* 🆕 Detalle de respuestas V/F detectadas */}
+                  {/* 🆕 Detalle de respuestas detectadas - Soporta V/F, MC y MS */}
                   {aiAnalysis.answers && Array.isArray(aiAnalysis.answers) && aiAnalysis.answers.length > 0 && (
                     <div className="mt-2 pt-2 border-t border-fuchsia-200 dark:border-fuchsia-700">
                       <div className="font-medium mb-1">Respuestas detectadas por IA:</div>
                       <div className="flex flex-wrap gap-1">
                         {aiAnalysis.answers.map((ans: any, idx: number) => {
                           const q = test?.questions?.[idx] as any
-                          const correct = q?.type === 'tf' ? (q.answer ? 'V' : 'F') : 
-                                          q?.type === 'mc' ? String.fromCharCode(65 + (q.correctIndex || 0)) : '?'
-                          const isCorrect = ans.detected?.toUpperCase() === correct
+                          let correct = '?'
+                          let isCorrect = false
+                          
+                          if (q?.type === 'tf') {
+                            correct = q.answer ? 'V' : 'F'
+                            isCorrect = ans.detected?.toUpperCase() === correct
+                          } else if (q?.type === 'mc') {
+                            correct = String.fromCharCode(65 + (q.correctIndex || 0))
+                            isCorrect = ans.detected?.toUpperCase() === correct
+                          } else if (q?.type === 'ms') {
+                            const correctLabels = (q.options || [])
+                              .map((o: any, j: number) => o.correct ? String.fromCharCode(65 + j) : '')
+                              .filter(Boolean)
+                              .sort()
+                              .join(',')
+                            const detectedLabels = (ans.detected || '')
+                              .split(',')
+                              .map((l: string) => l.trim().toUpperCase())
+                              .filter(Boolean)
+                              .sort()
+                              .join(',')
+                            correct = correctLabels
+                            isCorrect = correctLabels === detectedLabels
+                          }
+                          
                           return (
                             <span
                               key={idx}
@@ -2179,7 +2201,7 @@ export default function TestReviewDialog({ open, onOpenChange, test }: Props) {
                                 !ans.detected ? 'bg-gray-200 text-gray-600' :
                                 isCorrect ? 'bg-green-200 text-green-800' : 'bg-red-200 text-red-800'
                               }`}
-                              title={`Pregunta ${ans.questionNum}: Detectada=${ans.detected || 'ninguna'}, Correcta=${correct}`}
+                              title={`P${ans.questionNum} (${q?.type || '?'}): Detectada=${ans.detected || 'ninguna'}, Correcta=${correct}`}
                             >
                               #{ans.questionNum}: {ans.detected || '-'} {!ans.detected ? '❓' : isCorrect ? '✅' : '❌'}
                             </span>
@@ -2282,16 +2304,45 @@ export default function TestReviewDialog({ open, onOpenChange, test }: Props) {
                           <span className="text-gray-400">-</span>
                         )}
                       </td>
-                      {/* 🆕 Columna de respuestas detectadas */}
+                      {/* 🆕 Columna de respuestas detectadas - Soporta V/F, MC y MS */}
                       <td className="py-1 px-2 text-left">
                         {g.detectedAnswers && g.detectedAnswers.length > 0 ? (
                           <div className="flex flex-wrap gap-0.5">
                             {g.detectedAnswers.map((ans, ansIdx) => {
                               const qIndex = ans.questionNum - 1
                               const q = (test?.questions || [])[qIndex] as any
-                              const correctAnswer = q?.type === 'tf' ? (q.answer ? 'V' : 'F') : '?'
-                              const isCorrect = ans.detected?.toUpperCase() === correctAnswer
+                              
+                              // Determinar respuesta correcta según tipo de pregunta
+                              let correctAnswer = '?'
+                              let isCorrect = false
+                              
+                              if (q?.type === 'tf') {
+                                // Verdadero/Falso
+                                correctAnswer = q.answer ? 'V' : 'F'
+                                isCorrect = ans.detected?.toUpperCase() === correctAnswer
+                              } else if (q?.type === 'mc') {
+                                // Opción Múltiple (una sola correcta)
+                                correctAnswer = String.fromCharCode(65 + (q.correctIndex || 0))
+                                isCorrect = ans.detected?.toUpperCase() === correctAnswer
+                              } else if (q?.type === 'ms') {
+                                // Selección Múltiple (varias correctas)
+                                const correctLabels = (q.options || [])
+                                  .map((o: any, j: number) => o.correct ? String.fromCharCode(65 + j) : '')
+                                  .filter(Boolean)
+                                  .sort()
+                                  .join(',')
+                                const detectedLabels = (ans.detected || '')
+                                  .split(',')
+                                  .map((l: string) => l.trim().toUpperCase())
+                                  .filter(Boolean)
+                                  .sort()
+                                  .join(',')
+                                correctAnswer = correctLabels
+                                isCorrect = correctLabels === detectedLabels
+                              }
+                              
                               const isEmpty = !ans.detected
+                              
                               return (
                                 <span
                                   key={ansIdx}
@@ -2299,7 +2350,7 @@ export default function TestReviewDialog({ open, onOpenChange, test }: Props) {
                                     isEmpty ? 'bg-gray-200 text-gray-500' :
                                     isCorrect ? 'bg-green-200 text-green-800' : 'bg-red-200 text-red-800'
                                   }`}
-                                  title={`P${ans.questionNum}: ${isEmpty ? 'Sin respuesta' : ans.detected} ${isEmpty ? '' : isCorrect ? '✅' : '❌'}`}
+                                  title={`P${ans.questionNum} (${q?.type || '?'}): ${isEmpty ? 'Sin respuesta' : ans.detected} ${isEmpty ? '' : isCorrect ? '✅ Correcto' : `❌ Correcto: ${correctAnswer}`}`}
                                 >
                                   {ans.questionNum}:{isEmpty ? '-' : ans.detected}
                                 </span>
