@@ -88,12 +88,22 @@ class EmailNotificationService {
    */
   getUserEmailInfo(userId: string): { email: string; name: string } | null {
     try {
+      console.log(`📧 [EMAIL SERVICE] Looking for email info for userId: ${userId}`);
+      
+      const savedYear = Number(localStorage.getItem('admin-selected-year') || '');
+      const currentYear = Number.isFinite(savedYear) && savedYear > 0 ? savedYear : new Date().getFullYear();
+      
       // 1) Buscar en usuarios generales
       const storedUsers = localStorage.getItem('smart-student-users');
       if (storedUsers) {
         const users = JSON.parse(storedUsers);
-        const user = users.find((u: any) => u.id === userId || u.username === userId);
+        const user = users.find((u: any) => 
+          String(u.id) === String(userId) || 
+          u.username === userId ||
+          u.id === userId
+        );
         if (user && user.email) {
+          console.log(`📧 [EMAIL SERVICE] Found in users: ${user.email}`);
           return {
             email: user.email,
             name: user.displayName || user.username || 'Usuario'
@@ -102,17 +112,18 @@ class EmailNotificationService {
       }
       
       // 2) Buscar en estudiantes del año actual
-      const savedYear = Number(localStorage.getItem('admin-selected-year') || '');
-      const currentYear = Number.isFinite(savedYear) && savedYear > 0 ? savedYear : new Date().getFullYear();
-      
       const storedStudents = localStorage.getItem(`smart-student-students-${currentYear}`);
       if (storedStudents) {
         const students = JSON.parse(storedStudents);
         const student = students.find((s: any) => 
           String(s.id) === String(userId) || 
-          String(s.username) === String(userId)
+          String(s.username) === String(userId) ||
+          s.id === userId ||
+          // También buscar por RUT si el userId es un RUT
+          (s.rut && (s.rut === userId || s.rut.replace(/\./g, '').replace('-', '') === userId.replace(/\./g, '').replace('-', '')))
         );
         if (student && student.email) {
+          console.log(`📧 [EMAIL SERVICE] Found in students-${currentYear}: ${student.email}`);
           return {
             email: student.email,
             name: student.displayName || student.name || student.username || 'Estudiante'
@@ -126,13 +137,45 @@ class EmailNotificationService {
         const guardians = JSON.parse(storedGuardians);
         const guardian = guardians.find((g: any) => 
           String(g.id) === String(userId) || 
-          String(g.username) === String(userId)
+          String(g.username) === String(userId) ||
+          g.id === userId ||
+          // También buscar por RUT
+          (g.rut && (g.rut === userId || g.rut.replace(/\./g, '').replace('-', '') === userId.replace(/\./g, '').replace('-', '')))
         );
         if (guardian && guardian.email) {
+          console.log(`📧 [EMAIL SERVICE] Found in guardians-${currentYear}: ${guardian.email}`);
           return {
             email: guardian.email,
             name: guardian.displayName || guardian.name || guardian.username || 'Apoderado'
           };
+        }
+      }
+      
+      // 4) Buscar en relaciones guardian-student (para obtener guardianId y luego buscar su email)
+      let guardianRelations = JSON.parse(localStorage.getItem(`smart-student-guardian-student-relations-${currentYear}`) || '[]');
+      if (guardianRelations.length === 0) {
+        guardianRelations = JSON.parse(localStorage.getItem('smart-student-guardian-student-relations') || '[]');
+      }
+      
+      const relationForGuardian = guardianRelations.find((rel: any) => 
+        String(rel.guardianId) === String(userId) || rel.guardianId === userId
+      );
+      if (relationForGuardian) {
+        // Buscar el email del apoderado en la lista de guardians o users
+        const guardiansData = localStorage.getItem(`smart-student-guardians-${currentYear}`);
+        if (guardiansData) {
+          const guardians = JSON.parse(guardiansData);
+          const g = guardians.find((gu: any) => 
+            String(gu.id) === String(relationForGuardian.guardianId) ||
+            gu.username === relationForGuardian.guardianUsername
+          );
+          if (g && g.email) {
+            console.log(`📧 [EMAIL SERVICE] Found guardian via relations: ${g.email}`);
+            return {
+              email: g.email,
+              name: g.displayName || g.name || g.username || 'Apoderado'
+            };
+          }
         }
       }
       

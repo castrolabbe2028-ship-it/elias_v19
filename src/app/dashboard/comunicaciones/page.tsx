@@ -1151,6 +1151,8 @@ export default function ComunicacionesPage() {
             ? formData.selectedStudents
             : (formData.targetStudent ? [formData.targetStudent] : []);
           
+          console.log(`📧 [COMUNICACIONES] Enviando a estudiante(s) específico(s):`, recipientIds);
+          
           // Obtener info del curso
           if (formData.selectedCourseForStudent) {
             const cs = courseSections.find(c => c.id === formData.selectedCourseForStudent);
@@ -1167,32 +1169,106 @@ export default function ComunicacionesPage() {
           courseName = courses.find(c => c.id === courseId)?.name || '';
           sectionName = sections.find(s => s.id === sectionId)?.name || '';
           
-          // Buscar estudiantes que pertenecen a este curso/sección
+          // 📧 Buscar estudiantes del año actual que pertenecen a este curso/sección
+          const savedYear = Number(localStorage.getItem('admin-selected-year') || '');
+          const currentYear = Number.isFinite(savedYear) && savedYear > 0 ? savedYear : new Date().getFullYear();
+          
+          // 1. Buscar en estudiantes del año actual (fuente principal)
+          const storedStudents = localStorage.getItem(`smart-student-students-${currentYear}`);
+          if (storedStudents) {
+            const allStudents = JSON.parse(storedStudents);
+            const studentsInSection = allStudents.filter((s: any) => {
+              // Verificar si el estudiante pertenece a la sección seleccionada
+              const matchesCourse = s.courseId === courseId || s.course === courseId;
+              const matchesSection = s.sectionId === sectionId || s.section === sectionId;
+              // También verificar formato combinado
+              const combinedId = `${courseId}-${sectionId}`;
+              const matchesCombined = s.courseSectionId === combinedId || 
+                                      (s.courseId === courseId && s.sectionId === sectionId);
+              return matchesCourse && matchesSection || matchesCombined;
+            });
+            recipientIds = studentsInSection.map((s: any) => s.id);
+            console.log(`📧 [COMUNICACIONES] Encontrados ${recipientIds.length} estudiantes en ${courseName} - ${sectionName}`);
+          }
+          
+          // 2. También buscar en smart-student-users (respaldo)
           const storedUsers = localStorage.getItem('smart-student-users');
           if (storedUsers) {
             const allUsers = JSON.parse(storedUsers);
             const courseSectionKey = `${courseId}-${sectionId}`;
-            recipientIds = allUsers
+            const userIds = allUsers
               .filter((u: any) => 
                 (u.role === 'student' || u.role === 'guardian') && 
                 u.activeCourses?.some((ac: string) => ac === courseSectionKey || ac.includes(courseName))
               )
               .map((u: any) => u.id);
+            recipientIds = [...new Set([...recipientIds, ...userIds])];
           }
         }
         
-        // También incluir apoderados de los estudiantes
-        const storedUsers = localStorage.getItem('smart-student-users');
-        if (storedUsers) {
-          const allUsers = JSON.parse(storedUsers);
+        // 📧 BUSCAR APODERADOS DE LOS ESTUDIANTES (múltiples fuentes)
+        const studentIdsForGuardianLookup = [...recipientIds]; // Copiar los IDs de estudiantes encontrados
+        console.log(`📧 [COMUNICACIONES] Buscando apoderados para ${studentIdsForGuardianLookup.length} estudiantes`);
+        
+        // Fuente 1: guardian-student-relations (relaciones explícitas)
+        const savedYearForGuardians = Number(localStorage.getItem('admin-selected-year') || '');
+        const yearForGuardians = Number.isFinite(savedYearForGuardians) && savedYearForGuardians > 0 ? savedYearForGuardians : new Date().getFullYear();
+        
+        let guardianRelations = JSON.parse(localStorage.getItem(`smart-student-guardian-student-relations-${yearForGuardians}`) || '[]');
+        if (guardianRelations.length === 0) {
+          guardianRelations = JSON.parse(localStorage.getItem('smart-student-guardian-student-relations') || '[]');
+        }
+        
+        if (guardianRelations.length > 0) {
+          const guardiansFromRelations = guardianRelations
+            .filter((rel: any) => studentIdsForGuardianLookup.some(sid => 
+              String(rel.studentId) === String(sid) || 
+              rel.studentId === sid
+            ))
+            .map((rel: any) => rel.guardianId);
+          recipientIds = [...new Set([...recipientIds, ...guardiansFromRelations])];
+          console.log(`📧 [COMUNICACIONES] Apoderados desde relations: ${guardiansFromRelations.length}`);
+        }
+        
+        // Fuente 2: guardians-{year} (apoderados con studentIds)
+        const storedGuardians = localStorage.getItem(`smart-student-guardians-${yearForGuardians}`);
+        if (storedGuardians) {
+          const allGuardians = JSON.parse(storedGuardians);
+          const guardianIds = allGuardians
+            .filter((g: any) => {
+              // Verificar studentIds o students
+              const gStudentIds = g.studentIds || g.assignedStudents || g.students || [];
+              return gStudentIds.some((sid: string) => 
+                studentIdsForGuardianLookup.some(targetId => 
+                  String(sid) === String(targetId) || sid === targetId
+                )
+              );
+            })
+            .map((g: any) => g.id);
+          recipientIds = [...new Set([...recipientIds, ...guardianIds])];
+          console.log(`📧 [COMUNICACIONES] Apoderados desde guardians-${yearForGuardians}: ${guardianIds.length}`);
+        }
+        
+        // Fuente 3: smart-student-users (usuarios con role guardian)
+        const storedUsersForGuardians = localStorage.getItem('smart-student-users');
+        if (storedUsersForGuardians) {
+          const allUsers = JSON.parse(storedUsersForGuardians);
           const guardianIds = allUsers
-            .filter((u: any) => 
-              u.role === 'guardian' && 
-              u.assignedStudents?.some((studentId: string) => recipientIds.includes(studentId))
-            )
+            .filter((u: any) => {
+              if (u.role !== 'guardian') return false;
+              const uStudentIds = u.studentIds || u.assignedStudents || [];
+              return uStudentIds.some((sid: string) => 
+                studentIdsForGuardianLookup.some(targetId => 
+                  String(sid) === String(targetId) || sid === targetId
+                )
+              );
+            })
             .map((u: any) => u.id);
           recipientIds = [...new Set([...recipientIds, ...guardianIds])];
+          console.log(`📧 [COMUNICACIONES] Apoderados desde smart-student-users: ${guardianIds.length}`);
         }
+        
+        console.log(`📧 [COMUNICACIONES] Total destinatarios para email: ${recipientIds.length}`, recipientIds);
         
         if (recipientIds.length > 0) {
           // Usar .then/.catch en lugar de await para evitar requerir async
