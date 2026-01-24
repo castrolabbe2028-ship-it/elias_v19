@@ -72,6 +72,9 @@ Analiza VISUALMENTE cada página para detectar TODAS las preguntas visibles.
 ⚠️ CRÍTICO: DEBES REPORTAR CADA PREGUNTA INDIVIDUALMENTE, del 1 al ${qCount > 0 ? qCount : 'último número visible'}.
 NO AGRUPES, NO OMITAS, NO SALTES ninguna pregunta.
 
+🔴 MUY IMPORTANTE: Si ves "4. Problema 1:" o similar, eso es la PREGUNTA 4 de tipo DESARROLLO.
+Las preguntas que dicen "Problema", "Ejercicio", "Resuelve" son de tipo DESARROLLO (des).
+
 ## 📋 TIPOS DE PREGUNTAS A DETECTAR:
 
 ### TIPO 1: VERDADERO/FALSO (V/F)
@@ -132,17 +135,44 @@ EJEMPLOS:
 - Marcas en B, C y D → detected = "B,C,D", questionType = "ms"
 - Solo una marca en C → detected = "C", questionType = "ms"
 
-### TIPO 4: DESARROLLO / PROBLEMA (Respuesta escrita)
-Formato típico: Pregunta con espacio para escribir (líneas, cuadro, espacio en blanco)
-- El estudiante escribe texto manuscrito o impreso como respuesta
-- EXTRAE el texto completo de la respuesta del estudiante
+### TIPO 4: DESARROLLO / PROBLEMA (Respuesta escrita) ⚠️ MUY IMPORTANTE - NO OMITIR
+⚠️ PUEDE ESTAR EN CUALQUIER POSICIÓN (1, 2, 3, 4, 5, etc.) - NO asumas que siempre es la última pregunta.
+
+CÓMO IDENTIFICAR UNA PREGUNTA DE DESARROLLO:
+- Contiene palabras como: "Problema", "Ejercicio", "Resuelve", "Calcula", "Escribe", "Explica", "Responde"
+- Tiene líneas en blanco para escribir la respuesta
+- NO tiene alternativas (A, B, C, D) ni opciones V/F
+- Tiene espacio amplio para respuesta manuscrita
+- Puede incluir "(XX pts)" indicando que vale más puntos
+
+Formato de detección:
 - questionType = "des"
-- detected = "[texto extraído de la respuesta]" (máximo 500 caracteres)
-- Si hay operaciones matemáticas, extrae los números y resultados
-- Si no hay respuesta escrita → detected = null
-- ⚠️ MUY IMPORTANTE: NO omitas las preguntas de desarrollo, siempre inclúyelas
-- evidence = "TEXTO manuscrito" o "TEXTO impreso" según corresponda
-- Ejemplo de respuesta: "El resultado es 42 pasajeros. 38-12+9=35, 35-8+15=42"
+- detected = "[texto extraído de la respuesta manuscrita]" (máximo 500 caracteres)
+- evidence = "TEXTO manuscrito detectado" o "EMPTY - sin respuesta"
+
+🔴 OBLIGATORIO: SIEMPRE incluir las preguntas de desarrollo en "answers"
+- EXTRAE el texto completo de la respuesta del estudiante
+- Si hay operaciones matemáticas, extrae números y resultados (ej: "12 - 4 = 8")
+- Si hay texto escrito, extráelo completo (ej: "quedan 8 pajaros")
+- SOLO si el área está completamente vacía → detected = null
+
+🔴 EJEMPLOS CONCRETOS DE DESARROLLO:
+Ejemplo 1 - Pregunta 4:
+"4. Problema 1: Había 12 pájaros en un árbol. Se fueron 4 volando. ¿Cuántos quedaron? (25 pts)"
+Área de respuesta tiene escrito: "quedan 8 pajaros" y "12 - 4 = 8"
+→ {"questionNum": 4, "questionType": "des", "evidence": "TEXTO manuscrito detectado", "detected": "quedan 8 pajaros. 12 - 4 = 8", "points": 25}
+
+Ejemplo 2 - Pregunta 2:
+"2. Ejercicio: Juan tiene 5 canicas y le regalan 3 más. ¿Cuántas tiene ahora?"
+Área de respuesta tiene escrito: "tiene 8 canicas"
+→ {"questionNum": 2, "questionType": "des", "evidence": "TEXTO manuscrito detectado", "detected": "tiene 8 canicas", "points": null}
+
+Ejemplo 3 - Sin respuesta:
+"3. Problema: ..." con área de respuesta vacía
+→ {"questionNum": 3, "questionType": "des", "evidence": "EMPTY - sin respuesta", "detected": null, "points": null}
+
+⚠️ CRÍTICO: Las preguntas de desarrollo son OBLIGATORIAS en el análisis.
+Si ves una pregunta tipo problema con espacio para escribir, DEBES incluirla en "answers".
 
 ## 📋 PROTOCOLO DE DETECCIÓN SECUENCIAL:
 
@@ -231,8 +261,12 @@ f) questionType = "des"
 4. ¿Las selecciones múltiples están separadas por coma (A,C,D)? ✓
 5. ¿Las preguntas sin marca/respuesta tienen detected = null? ✓
 6. ¿La letra reportada corresponde a la OPCIÓN con marca, no a la posición visual? ✓
-7. ¿Extraje el TEXTO COMPLETO de las respuestas de desarrollo? ✓
-8. ¿El JSON es válido, sin texto adicional? ✓
+7. 🔴 ¿INCLUÍ las preguntas de DESARROLLO (des) y extraje el TEXTO MANUSCRITO? ✓ OBLIGATORIO
+8. ¿El texto de desarrollo incluye números, operaciones y palabras escritas? ✓
+9. ¿El JSON es válido, sin texto adicional? ✓
+
+🔴 RECORDATORIO FINAL: Las preguntas de desarrollo (questionType="des") son OBLIGATORIAS.
+Si ves una pregunta tipo problema con espacio para escribir, DEBES incluirla en "answers".
 
 Devuelve SOLO JSON válido, sin markdown ni explicaciones.
 `
@@ -251,9 +285,34 @@ Devuelve SOLO JSON válido, sin markdown ni explicaciones.
     const result = await model.generateContent(parts)
     const response = await result.response
     const text = response.text()
+    
+    console.log('[OMR-VISION] 📝 Respuesta RAW de Gemini (primeros 2000 chars):')
+    console.log(text.substring(0, 2000))
 
     try {
       const analysis = safeJsonParse(text)
+      
+      // 🆕 LOG: Verificar TODAS las preguntas detectadas
+      console.log(`[OMR-VISION] 📊 questionsFoundInDocument: ${analysis?.questionsFoundInDocument}`)
+      if (analysis?.pages) {
+        for (const page of analysis.pages) {
+          console.log(`[OMR-VISION] 📄 Página ${page.pageNum || page.pageIndex}: ${page.answers?.length || 0} respuestas`)
+          if (Array.isArray(page.answers)) {
+            for (const ans of page.answers) {
+              const qType = ans.questionType || ans.type || 'unknown'
+              const qNum = ans.questionNum || ans.q
+              const qVal = ans.detected ?? ans.val
+              console.log(`[OMR-VISION]   → P${qNum} (${qType}): "${qVal}" | evidence="${ans.evidence}"`)
+              
+              // Log especial para desarrollo
+              if (qType === 'des') {
+                console.log(`[OMR-VISION] 📝 DESARROLLO detectado: P${qNum} = "${qVal}"`)
+              }
+            }
+          }
+        }
+      }
+      
       return NextResponse.json({ success: true, analysis, rawResponse: text })
     } catch (parseError) {
       console.error('Error parseando respuesta de Gemini (visión):', parseError)

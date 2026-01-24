@@ -118,6 +118,7 @@ export default function TestReviewDialog({ open, onOpenChange, test }: Props) {
   const [ocr, setOcr] = useState<OCRResult | null>(null)
   const [processing, setProcessing] = useState(false)
   const [ocrProgress, setOcrProgress] = useState<{ current: number; total: number } | null>(null) // 🆕 Progreso OCR
+  const [analysisProgress, setAnalysisProgress] = useState<{ step: string; percent: number } | null>(null)
   const [analyzingWithAI, setAnalyzingWithAI] = useState(false) // 🆕 Estado para análisis con IA
   const [aiAnalysis, setAiAnalysis] = useState<any>(null) // 🆕 Resultado del análisis con IA
   const [score, setScore] = useState<number | null>(null)
@@ -458,9 +459,11 @@ export default function TestReviewDialog({ open, onOpenChange, test }: Props) {
                   for (const pg of keyData.analysis.pages) {
                     const answers = Array.isArray(pg?.answers) ? pg.answers : []
                     for (const a of answers) {
-                      const qn = Number(a?.questionNum)
+                      // 🔧 FIX: API usa "q" y "val", no "questionNum" y "detected"
+                      const qn = Number(a?.q ?? a?.questionNum)
                       if (!Number.isFinite(qn) || qn <= 0) continue
-                      const det = a?.detected === null || a?.detected === undefined ? null : String(a.detected).trim()
+                      const rawVal = a?.val ?? a?.detected
+                      const det = rawVal === null || rawVal === undefined ? null : String(rawVal).trim()
                       const pts = (a?.points === null || a?.points === undefined) ? null : Number(a.points)
                       if (det) {
                         if (!keyAnswerByQuestion.get(qn)) keyAnswerByQuestion.set(qn, det)
@@ -558,6 +561,10 @@ export default function TestReviewDialog({ open, onOpenChange, test }: Props) {
               })
 
               const visionData = await visionResp.json()
+              
+              // 🆕 DEBUG: Loguear respuesta completa de la API para diagnóstico
+              console.log(`[OCR/Vision] 🔍 Respuesta API para ${group.studentName}:`, JSON.stringify(visionData, null, 2).substring(0, 3000))
+              
               if (!visionData?.success || !Array.isArray(visionData?.analysis?.pages)) {
                 console.warn(`[OCR/Vision] ⚠️ Error procesando estudiante ${group.studentName}`)
                 processedCount++
@@ -570,6 +577,14 @@ export default function TestReviewDialog({ open, onOpenChange, test }: Props) {
               const docQuestionsFound = typeof visionData.analysis.questionsFoundInDocument === 'number'
                 ? visionData.analysis.questionsFoundInDocument
                 : null
+              
+              // 🆕 DEBUG: Loguear todas las respuestas que vienen de la API
+              for (const pg of visionData.analysis.pages) {
+                console.log(`[OCR/Vision] 📄 Página ${pg.pageNum || pg.pageIndex}: ${pg.answers?.length || 0} respuestas`)
+                for (const ans of (pg.answers || [])) {
+                  console.log(`[OCR/Vision]   → P${ans.q ?? ans.questionNum} (${ans.questionType ?? ans.type}): val="${ans.val ?? ans.detected}" | evidence="${ans.evidence}"`)
+                }
+              }
 
               // Procesar respuestas de este estudiante
               const studentName = group.studentName
@@ -583,7 +598,8 @@ export default function TestReviewDialog({ open, onOpenChange, test }: Props) {
               for (const pg of visionData.analysis.pages) {
                 const answers = Array.isArray(pg.answers) ? pg.answers : []
                 for (const a of answers) {
-                  const qn = Number(a?.questionNum)
+                  // 🔧 FIX: API usa "q" y "val", no "questionNum" y "detected"
+                  const qn = Number(a?.q ?? a?.questionNum)
                   if (!Number.isFinite(qn) || qn <= 0) continue
                   
                   // 🆕 VALIDACIÓN ANTI-ALUCINACIÓN: Solo si la evidencia CLARAMENTE indica vacío
@@ -598,7 +614,9 @@ export default function TestReviewDialog({ open, onOpenChange, test }: Props) {
                                           evidence.includes('AMBOS VACÍOS') ||
                                           evidence.includes('AMBOS PARENTESIS VACIOS')
                   
-                  let detected = a?.detected === null || a?.detected === undefined ? null : String(a.detected)
+                  // 🔧 FIX: API usa "val" no "detected"
+                  const rawVal = a?.val ?? a?.detected
+                  let detected = rawVal === null || rawVal === undefined ? null : String(rawVal)
                   
                   // Si la evidencia dice vacío, forzar null
                   if (isEmptyEvidence && detected !== null) {
@@ -607,14 +625,21 @@ export default function TestReviewDialog({ open, onOpenChange, test }: Props) {
                   }
                   
                   const pts = (a?.points === null || a?.points === undefined) ? null : Number(a.points)
+                  // 🔧 FIX: API usa "questionType" no "type"
+                  const questionType = a?.questionType || a?.type || 'unknown'
                   
                   if (detected && String(detected).trim()) {
-                    console.log(`[OMR/Vision] ✏️ P${qn}: detected="${detected}" | evidence="${evidence}"`)
+                    // 🆕 Log especial para desarrollo
+                    if (questionType === 'des') {
+                      console.log(`[OMR/Vision] 📝 P${qn} (DESARROLLO): texto="${detected.substring(0, 100)}..." | evidence="${evidence}"`)
+                    } else {
+                      console.log(`[OMR/Vision] ✏️ P${qn} (${questionType}): detected="${detected}" | evidence="${evidence}"`)
+                    }
                     if (!answerByQuestion.get(qn)) {
                       answerByQuestion.set(qn, detected)
                     }
                   } else {
-                    console.log(`[OMR/Vision] ⬜ P${qn}: SIN RESPUESTA | evidence="${evidence}"`)
+                    console.log(`[OMR/Vision] ⬜ P${qn} (${questionType}): SIN RESPUESTA | evidence="${evidence}"`)
                     if (!answerByQuestion.has(qn)) answerByQuestion.set(qn, null)
                   }
 
@@ -626,6 +651,71 @@ export default function TestReviewDialog({ open, onOpenChange, test }: Props) {
                 }
               }
 
+              // 🆕 RE-CHEQUEO PARA PREGUNTAS DE DESARROLLO: SIEMPRE usar extractor especializado
+              // El modelo de visión general suele fallar en extraer texto manuscrito correctamente
+              const testQuestions = test?.questions || []
+              console.log(`[OCR/Vision] 🔍 Verificando ${testQuestions.length} preguntas del test para re-chequeo de desarrollo...`)
+              
+              for (let qIdx = 0; qIdx < testQuestions.length; qIdx++) {
+                const q = testQuestions[qIdx] as any
+                const qNum = qIdx + 1
+                if (q?.type === 'des') {
+                  const currentVal = answerByQuestion.get(qNum)
+                  console.log(`[OCR/Vision] 📋 P${qNum} es tipo DESARROLLO. Valor actual: "${currentVal || 'null'}"`)
+                  
+                  // SIEMPRE intentar extracción especializada para desarrollo (no confiar en visión general)
+                  // Ejecutar extractor incluso si ya hay un valor, para mejorar la detección
+                  const needsExtraction = !currentVal || currentVal === null || String(currentVal).trim() === '' || String(currentVal).trim().length < 5
+                  
+                  console.log(`[OCR/Vision] 🔍 P${qNum} DESARROLLO: needsExtraction=${needsExtraction}, studentImages=${studentImages.length}`)
+                  
+                  if (needsExtraction && studentImages.length > 0) {
+                    console.log(`[OCR/Vision] 🔍 P${qNum} DESARROLLO sin respuesta válida. Usando extractor especializado en ${studentImages.length} páginas...`)
+                    
+                    // Intentar en CADA imagen del estudiante con el extractor especializado
+                    for (let imgIdx = 0; imgIdx < studentImages.length; imgIdx++) {
+                      const img = studentImages[imgIdx]
+                      if (!img?.dataUrl) {
+                        console.log(`[OCR/Vision] ⚠️ Página ${imgIdx + 1}: sin dataUrl`)
+                        continue
+                      }
+                      
+                      try {
+                        console.log(`[OCR/Vision] 🔄 Extrayendo texto P${qNum} (DES) de página ${imgIdx + 1}/${studentImages.length}...`)
+                        
+                        // Usar endpoint especializado para desarrollo
+                        const extractResp = await fetch('/api/extract-development-text', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({
+                            imageDataUrl: img.dataUrl,
+                            questionNum: qNum,
+                            questionText: q?.text || q?.prompt || '',
+                          }),
+                        })
+                        const extractData = await extractResp.json()
+                        
+                        console.log(`[OCR/Vision] 📦 Respuesta extractor P${qNum}:`, JSON.stringify(extractData).substring(0, 200))
+                        
+                        if (extractData.success && extractData.extractedText && String(extractData.extractedText).trim().length > 2) {
+                          console.log(`[OCR/Vision] ✅ Extractor P${qNum} (DES) página ${imgIdx + 1}: "${String(extractData.extractedText).substring(0, 50)}..."`)
+                          answerByQuestion.set(qNum, String(extractData.extractedText))
+                          break // Encontrado, salir del loop de páginas
+                        } else {
+                          console.log(`[OCR/Vision] ⬜ Extractor P${qNum} (DES) página ${imgIdx + 1}: sin texto válido (success=${extractData.success}, text="${extractData.extractedText}")`)
+                        }
+                      } catch (e) {
+                        console.warn(`[OCR/Vision] ⚠️ Falló extractor P${qNum} (DES) página ${imgIdx + 1}:`, e)
+                      }
+                    }
+                    
+                    const finalVal = answerByQuestion.get(qNum)
+                    if (!finalVal || String(finalVal).trim().length < 3) {
+                      console.log(`[OCR/Vision] ⬜ P${qNum} (DES): sin respuesta detectada en ninguna de las ${studentImages.length} páginas`)
+                    }
+                  }
+                }
+              }
               // 🔁 RE-CHEQUEO AUTOMÁTICO (caso Sofía): si hay P1..P4 pero falta P5, pedir verificación focalizada
               // Esto ataca el caso donde Gemini omite una pregunta aunque exista una marca clara.
               const has1 = answerByQuestion.has(1)
@@ -670,8 +760,16 @@ export default function TestReviewDialog({ open, onOpenChange, test }: Props) {
                 }
               }
               
+              // 🆕 Log estado final del map antes de contar
+              console.log(`[OCR/Vision] 📊 Estado final answerByQuestion para ${group.studentName}:`)
+              for (const [qn, val] of answerByQuestion.entries()) {
+                const q = (test?.questions || [])[qn - 1] as any
+                console.log(`  P${qn} (${q?.type || '?'}): ${val ? `"${String(val).substring(0, 30)}"` : 'null'}`)
+              }
+              
               for (const v of answerByQuestion.values()) if (v) answeredCount++
               const hasRealAnswers = answeredCount > 0
+              console.log(`[OCR/Vision] 📊 answeredCount=${answeredCount}, hasRealAnswers=${hasRealAnswers}`)
 
               // Calificar: si hay pauta, comparar contra pauta; si no, comparar contra test.questions
               let studentCorrect = 0
@@ -684,7 +782,18 @@ export default function TestReviewDialog({ open, onOpenChange, test }: Props) {
               const maxQ = keyMaxQ || (qTot > 0 ? qTot : (docQuestionsFound || 0))
               const denom = maxQ > 0 ? maxQ : (docQuestionsFound || answerByQuestion.size || 1)
 
-              // Armar lista de detectadas (solo las presentes)
+              // 🔧 FIX: Asegurar que TODAS las preguntas del test estén en answerByQuestion
+              // Esto garantiza que las preguntas de desarrollo aparezcan aunque Gemini no las detecte
+              const testQuestionsArray = test?.questions || []
+              for (let qIdx = 0; qIdx < testQuestionsArray.length; qIdx++) {
+                const qNum = qIdx + 1
+                if (!answerByQuestion.has(qNum)) {
+                  console.log(`[OCR/Vision] ⚠️ P${qNum} no fue detectada por Gemini, agregando como null`)
+                  answerByQuestion.set(qNum, null)
+                }
+              }
+
+              // Armar lista de detectadas (TODAS las preguntas del test)
               for (const [qn, det] of answerByQuestion.entries()) {
                 detectedAnswersList.push({ questionNum: qn, detected: det })
               }
@@ -706,12 +815,19 @@ export default function TestReviewDialog({ open, onOpenChange, test }: Props) {
 
               for (let qNum = 1; qNum <= denom; qNum++) {
                 const detected = answerByQuestion.get(qNum)
+                const qDef = (test?.questions || [])[qNum - 1] as any
+                
+                // 🆕 Log para depuración de desarrollo
+                if (qDef?.type === 'des') {
+                  console.log(`[Vision] 🔍 P${qNum} (DES): detected="${detected}" len=${detected?.length || 0}`)
+                }
+                
                 if (!detected) continue
 
                 // Puntos: preferir pauta -> PDF estudiante -> fallback por tipo
                 const kp = keyPointsByQuestion.get(qNum)
                 const sp = pointsByQuestion.get(qNum)
-                const q = (test?.questions || [])[qNum - 1] as any
+                const q = qDef
                 const fallbackPts = q?.type === 'tf' ? pointsPerType.tf
                   : q?.type === 'mc' ? pointsPerType.mc
                   : q?.type === 'ms' ? pointsPerType.ms
@@ -1410,8 +1526,8 @@ export default function TestReviewDialog({ open, onOpenChange, test }: Props) {
         studentFound: !!studentInfo,
       })
       
-      // 🤖 NUEVO: Analizar OCR con IA de Gemini automáticamente
-      analyzeWithAI(text, guessedName, studentInfo)
+      // 🤖 NUEVO: Analizar con IA de Gemini VISION (usa imagen, más preciso que texto OCR)
+      await analyzeWithAIVision(file, guessedName, studentInfo)
       
     } catch (e: any) {
       console.error(e)
@@ -1421,7 +1537,761 @@ export default function TestReviewDialog({ open, onOpenChange, test }: Props) {
     }
   }, [file, ensureWorker, test?.questions, students])
 
-  // 🤖 NUEVO: Función para analizar OCR con IA de Gemini
+  // 🔍 ANÁLISIS COMPLETO: Ejecuta OCR + Gemini Vision internamente
+  const runFullAnalysis = useCallback(async () => {
+    if (!file) return
+    
+    setProcessing(true)
+    setAnalyzingWithAI(true)
+    setError('')
+    setOcr(null)
+    setScore(null)
+    setAnalysisProgress({ step: 'Preparando documento...', percent: 5 })
+    setBreakdown({ tf: { correct: 0, total: 0 }, mc: { correct: 0, total: 0 }, ms: { correct: 0, total: 0 }, des: { correct: 0, total: 0 } })
+    
+    try {
+      console.log('[Full Analysis] 🔍 Iniciando análisis completo (OCR + Gemini Vision)...')
+      console.log('[Full Analysis] 📄 Archivo:', file.name, file.type, (file.size/1024).toFixed(1), 'KB')
+      
+      // ============================================
+      // PASO 1: OCR con Tesseract (extrae texto)
+      // ============================================
+      let ocrText = ''
+      let guessedName = ''
+      
+      try {
+        console.log('[Full Analysis] 📝 PASO 1: Ejecutando OCR con Tesseract...')
+        const worker = await ensureWorker()
+        
+        if (file.type === 'application/pdf') {
+          const pages = await renderPdfToImages(file)
+          for (const page of pages) {
+            const { data } = await worker.recognize(page.dataUrl)
+            ocrText += data.text + '\n'
+          }
+        } else {
+          const { data } = await worker.recognize(file)
+          ocrText = data.text
+        }
+        
+        setOcr({ text: ocrText })
+        console.log('[Full Analysis] ✅ OCR completado:', ocrText.substring(0, 200) + '...')
+        
+        // Intentar detectar nombre del estudiante del texto OCR
+        const namePatterns = [
+          /(?:nombre|estudiante|alumno)[:\s]*([A-ZÁÉÍÓÚÑa-záéíóúñ\s]+)/i,
+          /^([A-ZÁÉÍÓÚÑ][a-záéíóúñ]+\s+[A-ZÁÉÍÓÚÑ][a-záéíóúñ]+)/m
+        ]
+        for (const pattern of namePatterns) {
+          const match = ocrText.match(pattern)
+          if (match && match[1]) {
+            guessedName = match[1].trim()
+            setStudentName(guessedName)
+            break
+          }
+        }
+      } catch (ocrError) {
+        console.warn('[Full Analysis] ⚠️ OCR falló, continuando con Gemini Vision:', ocrError)
+      }
+      
+      // ============================================
+      // PASO 2: Gemini Vision (analiza TODAS las páginas)
+      // ============================================
+      console.log('[Full Analysis] 🤖 PASO 2: Analizando con Gemini Vision...')
+      
+      let allPages: Array<{ pageNum: number; dataUrl: string }> = []
+      
+      if (file.type === 'application/pdf') {
+        allPages = await renderPdfToImages(file)
+        console.log(`[Full Analysis] 📄 PDF tiene ${allPages.length} páginas`)
+      } else {
+        // Es una imagen única
+        const arrayBuffer = await file.arrayBuffer()
+        const base64 = btoa(
+          new Uint8Array(arrayBuffer).reduce((data, byte) => data + String.fromCharCode(byte), '')
+        )
+        allPages = [{ pageNum: 1, dataUrl: `data:image/jpeg;base64,${base64}` }]
+      }
+      
+      if (allPages.length === 0) {
+        setError('No se pudo procesar el archivo')
+        setAnalysisProgress(null)
+        return
+      }
+      
+      // Procesar CADA página como un estudiante diferente
+      const allResults: Array<{
+        pageNum: number
+        studentName: string
+        answers: any[]
+        aiCorrect: number
+        hasAnswers: boolean
+      }> = []
+      
+      for (let i = 0; i < allPages.length; i++) {
+        const page = allPages[i]
+        const progressPercent = 60 + Math.round((i / allPages.length) * 30)
+        setAnalysisProgress({ step: `Analizando página ${i + 1}/${allPages.length}...`, percent: progressPercent })
+        
+        console.log(`[Full Analysis] 📃 Procesando página ${i + 1}/${allPages.length}...`)
+        
+        const base64Data = page.dataUrl.split(',')[1]
+        
+        try {
+          const response = await fetch('/api/analyze-ocr', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              imageBase64: base64Data,
+              questions: test?.questions || [],
+              pageNumber: i + 1
+            })
+          })
+          
+          const data = await response.json()
+          console.log(`[Full Analysis] 📊 Página ${i + 1} respuesta:`, JSON.stringify(data, null, 2))
+          
+          if (data.success && data.analysis) {
+            const analysis = data.analysis
+            const answers = analysis.answers || []
+            const questions = test?.questions || []
+            
+            console.log(`[Full Analysis] 📝 Página ${i + 1}: ${answers.length} respuestas detectadas, ${questions.length} preguntas en prueba`)
+            console.log(`[Full Analysis] 📋 Respuestas raw:`, answers)
+            
+            // Calcular correctas para esta página
+            let aiCorrect = 0
+            let hasRealAnswers = false
+            
+            for (const answer of answers) {
+              const qNum = answer.q || answer.questionNum
+              const qIndex = qNum - 1
+              const q = questions[qIndex] as any
+              
+              const detected = answer.val !== undefined ? answer.val : answer.detected
+              const type = answer.type || q?.type
+              
+              console.log(`[Full Analysis] P${qNum}: val="${answer.val}", detected="${detected}", type="${type}", q exists: ${!!q}`)
+              
+              if (detected !== null && detected !== undefined && String(detected).length > 0) {
+                hasRealAnswers = true
+                
+                if (!q) {
+                  console.log(`[Full Analysis] ⚠️ Pregunta ${qNum} no existe en el test`)
+                  continue
+                }
+                
+                if (type === 'tf') {
+                  const correctAnswer = q.answer ? 'V' : 'F'
+                  const detectedUpper = String(detected).toUpperCase().trim()
+                  if (detectedUpper === correctAnswer || (detectedUpper === 'VERDADERO' && correctAnswer === 'V') || (detectedUpper === 'FALSO' && correctAnswer === 'F')) {
+                    aiCorrect++
+                  }
+                } else if (type === 'mc') {
+                  const correctLetter = String.fromCharCode(65 + (q.correctIndex || 0))
+                  if (String(detected).toUpperCase().trim() === correctLetter) {
+                    aiCorrect++
+                  }
+                } else if (type === 'ms') {
+                  const correctLabels = (q.options || [])
+                    .map((o: any, j: number) => o.correct ? String.fromCharCode(65 + j) : '')
+                    .filter(Boolean).sort().join(',')
+                  const detectedLabels = String(detected).split(',')
+                    .map((l: string) => l.trim().toUpperCase()).filter(Boolean).sort().join(',')
+                  if (correctLabels === detectedLabels) {
+                    aiCorrect++
+                  }
+                } else if (type === 'des') {
+                  if (String(detected || '').trim().length > 5) {
+                    aiCorrect++
+                  }
+                }
+              }
+            }
+            
+            // Obtener nombre del estudiante
+            let studentName = analysis.studentName || ''
+            if (!studentName || studentName.length < 3 || studentName.toLowerCase().includes('estudiante') || studentName.toLowerCase().includes('nombre')) {
+              studentName = `Estudiante Página ${i + 1}`
+            }
+            
+            console.log(`[Full Analysis] 📌 Agregando resultado: ${studentName}, correctas=${aiCorrect}, hasAnswers=${hasRealAnswers}, answers=`, answers.length)
+            
+            allResults.push({
+              pageNum: i + 1,
+              studentName,
+              answers,
+              aiCorrect,
+              hasAnswers: hasRealAnswers
+            })
+            
+            console.log(`[Full Analysis] ✅ Página ${i + 1}: ${studentName} - ${aiCorrect}/${questions.length} correctas, hasAnswers=${hasRealAnswers}`)
+          } else {
+            console.log(`[Full Analysis] ⚠️ Página ${i + 1}: No se obtuvo análisis válido`, data)
+          }
+        } catch (pageError) {
+          console.error(`[Full Analysis] ❌ Error en página ${i + 1}:`, pageError)
+        }
+      }
+      
+      console.log(`[Full Analysis] 📊 Resultados totales: ${allResults.length}`, allResults)
+      
+      // Agregar TODOS los resultados a preliminares
+      if (allResults.length > 0) {
+        setAnalysisProgress({ step: '¡Análisis completado!', percent: 100 })
+        
+        const questions = test?.questions || []
+        const qTot = questions.length
+        const totalPts = typeof (test as any)?.totalPoints === 'number' ? (test as any).totalPoints : qTot
+        
+        // 🔧 FIX: Consolidar FUSIONANDO respuestas de todas las páginas del mismo estudiante
+        // Antes solo tomaba la página con más correctas, perdiendo respuestas de otras páginas
+        const consolidatedByStudent = new Map<string, typeof allResults[0]>()
+        
+        for (const result of allResults) {
+          // Normalizar nombre para comparación
+          const normalizedName = result.studentName.toLowerCase().trim()
+          
+          const existing = consolidatedByStudent.get(normalizedName)
+          if (!existing) {
+            // Primera vez que vemos este estudiante
+            consolidatedByStudent.set(normalizedName, { ...result })
+            console.log(`[Full Analysis] 📌 Nuevo estudiante: ${result.studentName}`)
+          } else {
+            // 🆕 FUSIONAR respuestas: combinar answers de todas las páginas
+            console.log(`[Full Analysis] 🔄 Fusionando respuestas de ${result.studentName} (página adicional)`)
+            
+            // Crear un mapa de respuestas por número de pregunta
+            const mergedAnswers = new Map<number, any>()
+            
+            // Primero agregar las respuestas existentes
+            for (const ans of existing.answers || []) {
+              const qNum = ans.q || ans.questionNum
+              if (qNum && (ans.val !== null && ans.val !== undefined && String(ans.val).trim() !== '' && String(ans.val) !== 'null')) {
+                mergedAnswers.set(qNum, ans)
+              }
+            }
+            
+            // Luego agregar/sobreescribir con las nuevas respuestas que tengan valor
+            for (const ans of result.answers || []) {
+              const qNum = ans.q || ans.questionNum
+              const hasValue = ans.val !== null && ans.val !== undefined && String(ans.val).trim() !== '' && String(ans.val) !== 'null'
+              if (qNum && hasValue) {
+                // Solo agregar si no existe o si la nueva tiene más contenido
+                const existingAns = mergedAnswers.get(qNum)
+                if (!existingAns || String(ans.val).length > String(existingAns.val || '').length) {
+                  mergedAnswers.set(qNum, ans)
+                  console.log(`[Full Analysis]   → P${qNum} actualizada: "${String(ans.val).substring(0, 50)}..."`)
+                }
+              }
+            }
+            
+            // Reconstruir el array de answers fusionado
+            const fusedAnswers = Array.from(mergedAnswers.values()).sort((a, b) => (a.q || a.questionNum) - (b.q || b.questionNum))
+            
+            // Recontar correctas basado en las respuestas fusionadas
+            let fusedCorrect = 0
+            for (const ans of fusedAnswers) {
+              const qNum = ans.q || ans.questionNum
+              const qDef = questions[qNum - 1] as any
+              const detected = ans.val
+              
+              if (!detected || !qDef) continue
+              
+              if (qDef.type === 'tf') {
+                const correct = qDef.answer ? 'V' : 'F'
+                if (String(detected).toUpperCase() === correct) fusedCorrect++
+              } else if (qDef.type === 'mc') {
+                const correct = String.fromCharCode(65 + (qDef.correctIndex || 0))
+                if (String(detected).toUpperCase() === correct) fusedCorrect++
+              } else if (qDef.type === 'ms') {
+                const correctLabels = (qDef.options || []).map((o: any, j: number) => o.correct ? String.fromCharCode(65 + j) : '').filter(Boolean)
+                const detectedLabels = String(detected).split(',').map((l: string) => l.trim().toUpperCase()).filter(Boolean)
+                if (correctLabels.length === detectedLabels.length && correctLabels.every((l: string) => detectedLabels.includes(l))) fusedCorrect++
+              } else if (qDef.type === 'des') {
+                // Desarrollo: si hay texto significativo, contar como respondida
+                if (String(detected).trim().length > 5) fusedCorrect++
+              }
+            }
+            
+            // Actualizar el resultado consolidado
+            existing.answers = fusedAnswers
+            existing.aiCorrect = fusedCorrect
+            existing.hasAnswers = fusedAnswers.length > 0
+            
+            console.log(`[Full Analysis] 📊 ${result.studentName} fusionado: ${fusedCorrect} correctas, ${fusedAnswers.length} respuestas`)
+          }
+        }
+        
+        const consolidatedResults = Array.from(consolidatedByStudent.values())
+        console.log(`[Full Analysis] 📊 Consolidado: ${consolidatedResults.length} estudiantes únicos de ${allResults.length} páginas`)
+        
+        // Actualizar el primer estudiante detectado con respuestas en la UI
+        const bestResult = consolidatedResults.find(r => r.hasAnswers) || consolidatedResults[0]
+        if (bestResult) {
+          setStudentName(bestResult.studentName)
+          setScore(bestResult.aiCorrect)
+        }
+        
+        // Agregar todos a preliminares
+        setPreliminaryGrades(prev => {
+          const newGrades = [...prev]
+          
+          for (const result of consolidatedResults) {
+            // Solo agregar si tiene respuestas detectadas
+            if (!result.hasAnswers) {
+              console.log(`[Full Analysis] ⏭️ Saltando ${result.studentName} - sin respuestas`)
+              continue
+            }
+            
+            // Buscar estudiante en la lista por nombre
+            const existingStudent = students.find(s => 
+              s.name.toLowerCase().includes(result.studentName.toLowerCase()) ||
+              result.studentName.toLowerCase().includes(s.name.toLowerCase())
+            )
+            
+            const pts = qTot > 0 ? Math.round((result.aiCorrect / qTot) * totalPts) : 0
+            
+            // Verificar si ya existe en los preliminares
+            const existingIdx = newGrades.findIndex(p => 
+              p.studentId === existingStudent?.id || 
+              p.studentName.toLowerCase() === result.studentName.toLowerCase()
+            )
+            
+            // 🔧 FIX: Incluir TODAS las respuestas, no solo las que tienen val
+            // Esto asegura que las preguntas de desarrollo también aparezcan
+            const detectedAnswers = result.answers
+              .filter((a: any) => {
+                const val = a.val ?? a.detected
+                return val !== null && val !== undefined && String(val).trim() !== '' && String(val) !== 'null'
+              })
+              .map((a: any) => ({ 
+                questionNum: a.q || a.questionNum, 
+                detected: a.val ?? a.detected 
+              }))
+            
+            console.log(`[Full Analysis] ✅ Agregando ${result.studentName}: ${result.aiCorrect}/${qTot} = ${pts} pts, respuestas:`, detectedAnswers)
+            
+            if (existingIdx >= 0) {
+              // Actualizar solo si el nuevo tiene más respuestas
+              if (result.aiCorrect >= (newGrades[existingIdx].score || 0)) {
+                newGrades[existingIdx] = {
+                  ...newGrades[existingIdx],
+                  score: result.aiCorrect,
+                  pct: qTot > 0 ? Math.round((result.aiCorrect / qTot) * 100) : 0,
+                  pts,
+                  hasAnswers: result.hasAnswers,
+                  detectedAnswers,
+                }
+              }
+            } else {
+              newGrades.push({
+                studentId: existingStudent?.id || null,
+                studentName: result.studentName,
+                studentInfo: existingStudent || null,
+                score: result.aiCorrect,
+                pct: qTot > 0 ? Math.round((result.aiCorrect / qTot) * 100) : 0,
+                pts,
+                saved: false,
+                hasAnswers: result.hasAnswers,
+                detectedAnswers,
+                questionsInOCR: qTot
+              })
+            }
+          }
+          
+          return newGrades
+        })
+        
+        console.log(`[Full Analysis] 🎯 Total: ${consolidatedResults.length} estudiantes procesados`)
+        setTimeout(() => setAnalysisProgress(null), 2000)
+      } else {
+        console.log('[Full Analysis] ⚠️ No se detectaron respuestas en ninguna página')
+        setAnalysisProgress(null)
+        setError('No se detectaron respuestas. Verifique que el archivo sea legible.')
+      }
+    } catch (err: any) {
+      console.error('[Full Analysis] ❌ Error:', err)
+      setAnalysisProgress(null)
+      setError(err?.message || 'Error al analizar el documento')
+    } finally {
+      setProcessing(false)
+      setAnalyzingWithAI(false)
+    }
+  }, [file, test?.questions, students, ensureWorker, renderPdfToImages])
+
+  // 🚀 ESTRATEGIA 2: Ejecutar SOLO Gemini Vision (sin OCR)
+  const runGeminiVision = useCallback(async () => {
+    if (!file) return
+    
+    setProcessing(true)
+    setAnalyzingWithAI(true)
+    setError('')
+    setOcr(null)
+    setScore(null)
+    setBreakdown({ tf: { correct: 0, total: 0 }, mc: { correct: 0, total: 0 }, ms: { correct: 0, total: 0 }, des: { correct: 0, total: 0 } })
+    
+    try {
+      console.log('[Gemini Vision] 🚀 Iniciando análisis directo con Gemini Vision...')
+      console.log('[Gemini Vision] 📄 Archivo:', file.name, file.type, (file.size/1024).toFixed(1), 'KB')
+      
+      // Preparar imagen base64
+      let base64Data: string = ''
+      
+      if (file.type === 'application/pdf') {
+        console.log('[Gemini Vision] 📄 Renderizando PDF a imagen...')
+        const pages = await renderPdfToImages(file)
+        if (pages.length > 0) {
+          base64Data = pages[0].dataUrl.split(',')[1]
+          console.log(`[Gemini Vision] ✅ PDF renderizado (${pages.length} páginas)`)
+        }
+      } else {
+        const arrayBuffer = await file.arrayBuffer()
+        base64Data = btoa(
+          new Uint8Array(arrayBuffer).reduce((data, byte) => data + String.fromCharCode(byte), '')
+        )
+        console.log('[Gemini Vision] ✅ Imagen cargada directamente')
+      }
+      
+      if (!base64Data) {
+        setError('No se pudo procesar el archivo')
+        return
+      }
+      
+      console.log('[Gemini Vision] 📡 Enviando a API /api/analyze-ocr...')
+      
+      const response = await fetch('/api/analyze-ocr', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          imageBase64: base64Data,
+          questions: test?.questions || [],
+          pageNumber: 1
+        })
+      })
+      
+      const data = await response.json()
+      console.log('[Gemini Vision] 📊 Respuesta:', JSON.stringify(data, null, 2))
+      
+      if (data.success && data.analysis) {
+        const analysis = data.analysis
+        setAiAnalysis(analysis)
+        
+        // Detectar nombre del estudiante
+        if (analysis.studentName) {
+          setStudentName(analysis.studentName)
+        }
+        
+        // Procesar respuestas
+        const answers = analysis.answers || []
+        const questions = test?.questions || []
+        
+        if (answers.length > 0) {
+          let aiCorrect = 0
+          const bd = { tf: { correct: 0, total: 0 }, mc: { correct: 0, total: 0 }, ms: { correct: 0, total: 0 }, des: { correct: 0, total: 0 } }
+          let hasRealAnswers = false
+          
+          console.log('[Gemini Vision] 📝 Procesando', answers.length, 'respuestas detectadas...')
+          
+          for (const answer of answers) {
+            const qNum = answer.q || answer.questionNum
+            const qIndex = qNum - 1
+            const q = questions[qIndex] as any
+            if (!q) continue
+            
+            const detected = answer.val || answer.detected
+            const type = answer.type || q.type
+            
+            console.log(`[Gemini Vision] P${qNum}: tipo=${type}, detectado="${detected}", evidencia="${answer.evidence}"`)
+            
+            if (detected !== null && detected !== undefined) {
+              hasRealAnswers = true
+              
+              if (type === 'tf') {
+                bd.tf.total++
+                const correctAnswer = q.answer ? 'V' : 'F'
+                const detectedUpper = String(detected).toUpperCase().trim()
+                if (detectedUpper === correctAnswer || (detectedUpper === 'VERDADERO' && correctAnswer === 'V') || (detectedUpper === 'FALSO' && correctAnswer === 'F')) {
+                  aiCorrect++
+                  bd.tf.correct++
+                  console.log(`[Gemini Vision] ✅ TF #${qNum} CORRECTA`)
+                }
+              } else if (type === 'mc') {
+                bd.mc.total++
+                const correctLetter = String.fromCharCode(65 + (q.correctIndex || 0))
+                const detectedUpper = String(detected).toUpperCase().trim()
+                if (detectedUpper === correctLetter) {
+                  aiCorrect++
+                  bd.mc.correct++
+                  console.log(`[Gemini Vision] ✅ MC #${qNum} CORRECTA`)
+                }
+              } else if (type === 'ms') {
+                bd.ms.total++
+                const correctLabels = (q.options || [])
+                  .map((o: any, j: number) => o.correct ? String.fromCharCode(65 + j) : '')
+                  .filter(Boolean).sort().join(',')
+                const detectedLabels = String(detected).split(',')
+                  .map((l: string) => l.trim().toUpperCase()).filter(Boolean).sort().join(',')
+                if (correctLabels === detectedLabels) {
+                  aiCorrect++
+                  bd.ms.correct++
+                  console.log(`[Gemini Vision] ✅ MS #${qNum} CORRECTA`)
+                }
+              } else if (type === 'des') {
+                bd.des.total++
+                if (String(detected || '').trim().length > 5) {
+                  aiCorrect++
+                  bd.des.correct++
+                }
+              }
+            } else {
+              if (type === 'tf') bd.tf.total++
+              else if (type === 'mc') bd.mc.total++
+              else if (type === 'ms') bd.ms.total++
+              else if (type === 'des') bd.des.total++
+            }
+          }
+          
+          console.log(`[Gemini Vision] 🎯 Resultado: ${aiCorrect}/${questions.length} correctas`)
+          
+          setVerification(v => ({ ...v, hasAnswers: hasRealAnswers }))
+          setScore(aiCorrect)
+          setBreakdown(bd)
+          
+          // Calcular puntos
+          const qTot = questions.length
+          const totalPts = typeof (test as any)?.totalPoints === 'number' ? (test as any).totalPoints : qTot
+          const pts = qTot > 0 ? Math.round((aiCorrect / qTot) * totalPts) : 0
+          setEditScore(pts)
+          
+          // Agregar a preliminares
+          const existingStudent = students.find(s => 
+            s.name.toLowerCase().includes((analysis.studentName || '').toLowerCase()) ||
+            (analysis.studentName || '').toLowerCase().includes(s.name.toLowerCase())
+          )
+          
+          setPreliminaryGrades(prev => {
+            const existing = prev.find(p => p.studentId === existingStudent?.id)
+            if (existing) {
+              return prev.map(p => p.studentId === existingStudent?.id ? { 
+                ...p, 
+                score: aiCorrect, 
+                pct: qTot > 0 ? Math.round((aiCorrect / qTot) * 100) : 0,
+                pts: pts,
+                hasAnswers: hasRealAnswers,
+                detectedAnswers: answers.map((a: any) => ({ questionNum: a.q, detected: a.val }))
+              } : p)
+            }
+            return [...prev, {
+              studentId: existingStudent?.id || null,
+              studentName: analysis.studentName || 'Estudiante detectado',
+              studentInfo: existingStudent || null,
+              score: aiCorrect,
+              pct: qTot > 0 ? Math.round((aiCorrect / qTot) * 100) : 0,
+              pts: pts,
+              saved: false,
+              hasAnswers: hasRealAnswers,
+              detectedAnswers: answers.map((a: any) => ({ questionNum: a.q, detected: a.val })),
+              questionsInOCR: qTot
+            }]
+          })
+        } else {
+          console.log('[Gemini Vision] ⚠️ No se detectaron respuestas')
+          setError('Gemini no detectó respuestas en el documento. Intenta con OCR tradicional.')
+        }
+      } else {
+        console.error('[Gemini Vision] ❌ Error:', data.error)
+        setError(data.error || 'Error al analizar con Gemini Vision')
+      }
+    } catch (err: any) {
+      console.error('[Gemini Vision] ❌ Error:', err)
+      setError(err?.message || 'Error al analizar con Gemini Vision')
+    } finally {
+      setProcessing(false)
+      setAnalyzingWithAI(false)
+    }
+  }, [file, test?.questions, students, renderPdfToImages])
+
+  // 🤖 Función auxiliar para analizar con Gemini VISION (usada por runOCR)
+  const analyzeWithAIVision = useCallback(async (imageFile: File, detectedName: string, studentInfo: any) => {
+    if (!imageFile) return
+    
+    setAnalyzingWithAI(true)
+    try {
+      console.log('[AI Vision] 🖼️ Preparando imagen para Gemini Vision...')
+      
+      let base64Data: string = ''
+      
+      // Si es PDF, renderizar a imagen
+      if (imageFile.type === 'application/pdf') {
+        const pages = await renderPdfToImages(imageFile)
+        if (pages.length > 0) {
+          // Usar la primera página (o combinar múltiples páginas si es necesario)
+          base64Data = pages[0].dataUrl.split(',')[1]
+          console.log(`[AI Vision] 📄 PDF renderizado a imagen (${pages.length} páginas)`)
+        }
+      } else {
+        // Es una imagen directa
+        const arrayBuffer = await imageFile.arrayBuffer()
+        base64Data = btoa(
+          new Uint8Array(arrayBuffer).reduce((data, byte) => data + String.fromCharCode(byte), '')
+        )
+        console.log('[AI Vision] 🖼️ Imagen cargada directamente')
+      }
+      
+      if (!base64Data) {
+        console.warn('[AI Vision] ⚠️ No se pudo obtener imagen base64')
+        return
+      }
+      
+      console.log('[AI Vision] 🚀 Enviando imagen a Gemini Vision API...')
+      
+      const response = await fetch('/api/analyze-ocr', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          imageBase64: base64Data,
+          questions: test?.questions || [],
+          pageNumber: 1
+        })
+      })
+      
+      const data = await response.json()
+      console.log('[AI Vision] 📊 Respuesta completa:', JSON.stringify(data, null, 2))
+      
+      if (data.success && data.analysis) {
+        const analysis = data.analysis
+        setAiAnalysis(analysis)
+        
+        // Actualizar nombre del estudiante si se detectó
+        if (analysis.studentName && !detectedName) {
+          setStudentName(analysis.studentName)
+        }
+        
+        // Procesar respuestas detectadas por la IA
+        const answers = analysis.answers || []
+        const questions = test?.questions || []
+        
+        if (answers.length > 0) {
+          let aiCorrect = 0
+          const bd = { tf: { correct: 0, total: 0 }, mc: { correct: 0, total: 0 }, ms: { correct: 0, total: 0 }, des: { correct: 0, total: 0 } }
+          let hasRealAnswers = false
+          
+          console.log('[AI Vision] 📝 Procesando respuestas detectadas...')
+          
+          for (const answer of answers) {
+            const qNum = answer.q || answer.questionNum
+            const qIndex = qNum - 1
+            const q = questions[qIndex] as any
+            if (!q) continue
+            
+            const detected = answer.val || answer.detected
+            const type = answer.type || q.type
+            
+            console.log(`[AI Vision] P${qNum}: tipo=${type}, detectado="${detected}", evidencia="${answer.evidence}"`)
+            
+            // Verificar si hay respuesta (no null)
+            if (detected !== null && detected !== undefined) {
+              hasRealAnswers = true
+              
+              if (type === 'tf') {
+                bd.tf.total++
+                const correctAnswer = q.answer ? 'V' : 'F'
+                const detectedUpper = String(detected).toUpperCase().trim()
+                
+                console.log(`[AI Vision] TF #${qNum}: correcta="${correctAnswer}", detectada="${detectedUpper}"`)
+                
+                if (detectedUpper === correctAnswer || detectedUpper === 'VERDADERO' && correctAnswer === 'V' || detectedUpper === 'FALSO' && correctAnswer === 'F') {
+                  aiCorrect++
+                  bd.tf.correct++
+                  console.log(`[AI Vision] ✅ Pregunta ${qNum} CORRECTA`)
+                } else {
+                  console.log(`[AI Vision] ❌ Pregunta ${qNum} incorrecta`)
+                }
+              } else if (type === 'mc') {
+                bd.mc.total++
+                const correctLetter = String.fromCharCode(65 + (q.correctIndex || 0))
+                const detectedUpper = String(detected).toUpperCase().trim()
+                
+                if (detectedUpper === correctLetter) {
+                  aiCorrect++
+                  bd.mc.correct++
+                  console.log(`[AI Vision] ✅ MC #${qNum} CORRECTA (${detectedUpper})`)
+                } else {
+                  console.log(`[AI Vision] ❌ MC #${qNum} incorrecta (esperaba ${correctLetter}, detectó ${detectedUpper})`)
+                }
+              } else if (type === 'ms') {
+                bd.ms.total++
+                // Para selección múltiple, verificar todas las opciones
+                const correctLabels = (q.options || [])
+                  .map((o: any, j: number) => o.correct ? String.fromCharCode(65 + j) : '')
+                  .filter(Boolean)
+                  .sort()
+                  .join(',')
+                const detectedLabels = String(detected)
+                  .split(',')
+                  .map((l: string) => l.trim().toUpperCase())
+                  .filter(Boolean)
+                  .sort()
+                  .join(',')
+                
+                if (correctLabels === detectedLabels) {
+                  aiCorrect++
+                  bd.ms.correct++
+                  console.log(`[AI Vision] ✅ MS #${qNum} CORRECTA (${detectedLabels})`)
+                } else {
+                  console.log(`[AI Vision] ❌ MS #${qNum} incorrecta (esperaba ${correctLabels}, detectó ${detectedLabels})`)
+                }
+              } else if (type === 'des') {
+                bd.des.total++
+                const detectedText = String(detected || '').trim()
+                if (detectedText.length > 5) {
+                  // Si hay respuesta escrita, contar como respondida
+                  aiCorrect++
+                  bd.des.correct++
+                  console.log(`[AI Vision] 📝 DES #${qNum}: respuesta detectada`)
+                }
+              }
+            } else {
+              // Pregunta sin respuesta
+              if (type === 'tf') bd.tf.total++
+              else if (type === 'mc') bd.mc.total++
+              else if (type === 'ms') bd.ms.total++
+              else if (type === 'des') bd.des.total++
+            }
+          }
+          
+          // Actualizar estado con resultados de IA
+          console.log(`[AI Vision] 🎯 Total correctas: ${aiCorrect}/${questions.length}`)
+          
+          setVerification(v => ({ ...v, hasAnswers: hasRealAnswers }))
+          
+          if (hasRealAnswers) {
+            setScore(aiCorrect)
+            setBreakdown(bd)
+            
+            // Calcular puntos
+            const qTot = questions.length
+            const totalPts = typeof (test as any)?.totalPoints === 'number' ? (test as any).totalPoints : qTot
+            const pts = qTot > 0 ? Math.round((aiCorrect / qTot) * totalPts) : 0
+            setEditScore(pts)
+            
+            console.log(`[AI Vision] ✅ Score actualizado: ${aiCorrect} correctas = ${pts} pts`)
+          }
+        } else {
+          console.log('[AI Vision] ⚠️ No se detectaron respuestas en la imagen')
+        }
+      } else {
+        console.warn('[AI Vision] ⚠️ Respuesta de IA sin éxito:', data.error || 'desconocido')
+      }
+    } catch (err) {
+      console.warn('[AI Vision] ❌ Error:', err)
+    } finally {
+      setAnalyzingWithAI(false)
+    }
+  }, [test?.questions, students, renderPdfToImages])
+
+  // 🤖 LEGACY: Función para analizar OCR con texto (fallback)
   const analyzeWithAI = useCallback(async (ocrText: string, detectedName: string, studentInfo: any) => {
     if (!ocrText || ocrText.length < 50) return
     
@@ -2137,20 +3007,31 @@ export default function TestReviewDialog({ open, onOpenChange, test }: Props) {
               </span>
             )}
 
-            {/* Ejecutar OCR */}
-            <Button onClick={runOCR} disabled={!file || processing || analyzingWithAI}>
-              {processing ? translate('testsReviewProcessing') : analyzingWithAI ? '🤖 Analizando con IA...' : translate('testsReviewRunOCR')}
+            {/* Ejecutar Análisis Completo (OCR + Gemini Vision) */}
+            <Button 
+              onClick={runFullAnalysis} 
+              disabled={!file || processing || analyzingWithAI}
+              className="bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white"
+              title="Análisis completo: OCR + Gemini Vision para máxima precisión"
+            >
+              {processing || analyzingWithAI ? '🔄 Analizando...' : '🔍 Analizar Prueba'}
             </Button>
-            {/* 🆕 Indicador de progreso OCR */}
-            {ocrProgress && (
-              <span className="text-xs font-medium text-blue-600 bg-blue-100 dark:bg-blue-900/50 dark:text-blue-300 px-2 py-1 rounded-full animate-pulse">
-                {Math.round((ocrProgress.current / ocrProgress.total) * 100)}% ({ocrProgress.current}/{ocrProgress.total})
-              </span>
+            
+            {/* 🆕 Indicador de progreso de validación */}
+            {analysisProgress && (
+              <div className="flex items-center gap-2 px-3 py-1.5 bg-gradient-to-r from-blue-100 to-purple-100 dark:from-blue-900/50 dark:to-purple-900/50 rounded-full">
+                <div className="w-16 h-2 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
+                  <div 
+                    className="h-full bg-gradient-to-r from-blue-500 to-purple-500 transition-all duration-300"
+                    style={{ width: `${analysisProgress.percent}%` }}
+                  />
+                </div>
+                <span className="text-xs font-medium text-purple-700 dark:text-purple-300 whitespace-nowrap">
+                  {analysisProgress.step} {analysisProgress.percent}%
+                </span>
+              </div>
             )}
-            {/* Indicador de análisis con IA */}
-            {analyzingWithAI && (
-              <span className="text-xs text-fuchsia-600 animate-pulse">🤖 Validando respuestas con Gemini...</span>
-            )}
+            
             {/* Acciones Excel alineadas a la derecha */}
             <div className="ml-auto flex gap-2 items-center">
               <Button
@@ -2181,12 +3062,20 @@ export default function TestReviewDialog({ open, onOpenChange, test }: Props) {
           {ocr && (
             <div className="border rounded-md p-3 space-y-2">
               <div className="text-sm">
-                <span className="font-medium">{translate('testsReviewStudent')}</span> {studentName || translate('testsReviewNotDetected')}
-                {!studentName && (
-                  <div className="text-xs text-amber-600 mt-1">
-                    💡 Sugerencia: Busque líneas con "Nombre:", "Estudiante:", o nombres en las primeras líneas del texto OCR
-                  </div>
-                )}
+                {/* 🔧 FIX: Siempre mostrar Curso cuando hay un test seleccionado */}
+                <span className="font-medium">Curso:</span> {(() => {
+                  // Obtener nombre del curso/sección
+                  try {
+                    const sections = JSON.parse(localStorage.getItem('smart-student-sections') || '[]')
+                    const courses = JSON.parse(localStorage.getItem('smart-student-courses') || '[]')
+                    const sec = sections.find((s: any) => String(s.id) === String(test?.sectionId))
+                    const course = courses.find((c: any) => String(c.id) === String(sec?.courseId || test?.courseId))
+                    const courseName = `${course?.name || ''} ${sec?.name || ''}`.trim()
+                    return courseName || test?.courseName || 'No especificado'
+                  } catch {
+                    return test?.courseName || 'No especificado'
+                  }
+                })()}
               </div>
               <div className="flex items-center gap-2 text-xs">
                 <span className={`inline-flex items-center gap-1 ${verification.sameDocument ? 'text-green-600' : 'text-amber-600'}`}>
@@ -2376,67 +3265,69 @@ export default function TestReviewDialog({ open, onOpenChange, test }: Props) {
                           <span className="text-gray-400">-</span>
                         )}
                       </td>
-                      {/* 🆕 Columna de respuestas detectadas - Soporta V/F, MC y MS */}
+                      {/* 🆕 Columna de respuestas detectadas - Muestra TODAS las preguntas */}
                       <td className="py-1 px-2 text-left">
-                        {g.detectedAnswers && g.detectedAnswers.length > 0 ? (
-                          <div className="flex flex-wrap gap-0.5">
-                            {g.detectedAnswers.map((ans, ansIdx) => {
-                              const qIndex = ans.questionNum - 1
-                              const q = (test?.questions || [])[qIndex] as any
-                              
-                              // Determinar respuesta correcta según tipo de pregunta
-                              let correctAnswer = '?'
-                              let isCorrect = false
-                              
-                              if (q?.type === 'tf') {
-                                // Verdadero/Falso
-                                correctAnswer = q.answer ? 'V' : 'F'
-                                isCorrect = ans.detected?.toUpperCase() === correctAnswer
-                              } else if (q?.type === 'mc') {
-                                // Opción Múltiple (una sola correcta)
-                                correctAnswer = String.fromCharCode(65 + (q.correctIndex || 0))
-                                isCorrect = ans.detected?.toUpperCase() === correctAnswer
-                              } else if (q?.type === 'ms') {
-                                // Selección Múltiple (varias correctas)
-                                const correctLabels = (q.options || [])
-                                  .map((o: any, j: number) => o.correct ? String.fromCharCode(65 + j) : '')
-                                  .filter(Boolean)
-                                  .sort()
-                                  .join(',')
-                                const detectedLabels = (ans.detected || '')
-                                  .split(',')
-                                  .map((l: string) => l.trim().toUpperCase())
-                                  .filter(Boolean)
-                                  .sort()
-                                  .join(',')
-                                correctAnswer = correctLabels
-                                isCorrect = correctLabels === detectedLabels
-                              } else if (q?.type === 'des') {
-                                // Desarrollo: si hay texto, se considera respondida
-                                const hasText = ans.detected && ans.detected.length > 5
-                                correctAnswer = 'Respuesta escrita'
-                                isCorrect = hasText // Verde si hay respuesta
-                              }
-                              
-                              const isEmpty = !ans.detected
-                              
-                              return (
-                                <span
-                                  key={ansIdx}
-                                  className={`px-1 py-0.5 rounded text-xs ${
-                                    isEmpty ? 'bg-gray-200 text-gray-500' :
-                                    isCorrect ? 'bg-green-200 text-green-800' : 'bg-red-200 text-red-800'
-                                  }`}
-                                  title={`P${ans.questionNum} (${q?.type || '?'}): ${isEmpty ? 'Sin respuesta' : (q?.type === 'des' ? ans.detected : ans.detected)} ${isEmpty ? '' : isCorrect ? '✅ Correcto' : `❌ Correcto: ${correctAnswer}`}`}
-                                >
-                                  {ans.questionNum}:{isEmpty ? '-' : (q?.type === 'des' ? (ans.detected?.length > 15 ? '✍️' + ans.detected.substring(0, 12) + '...' : '✍️' + ans.detected) : ans.detected)}
-                                </span>
-                              )
-                            })}
-                          </div>
-                        ) : (
-                          <span className="text-gray-400 text-xs">Sin datos</span>
-                        )}
+                        {(() => {
+                          const questions = test?.questions || []
+                          const detectedMap = new Map<number, string | null>()
+                          
+                          // Crear mapa de respuestas detectadas
+                          if (g.detectedAnswers) {
+                            for (const ans of g.detectedAnswers) {
+                              detectedMap.set(ans.questionNum, ans.detected)
+                            }
+                          }
+                          
+                          return (
+                            <div className="flex flex-wrap gap-0.5">
+                              {questions.map((q: any, qIdx: number) => {
+                                const qNum = qIdx + 1
+                                const detected = detectedMap.get(qNum)
+                                const isEmpty = detected === null || detected === undefined || detected === ''
+                                
+                                // Determinar respuesta correcta según tipo de pregunta
+                                let correctAnswer = '?'
+                                let isCorrect = false
+                                
+                                if (q?.type === 'tf') {
+                                  correctAnswer = q.answer ? 'V' : 'F'
+                                  isCorrect = !isEmpty && detected?.toUpperCase() === correctAnswer
+                                } else if (q?.type === 'mc') {
+                                  correctAnswer = String.fromCharCode(65 + (q.correctIndex || 0))
+                                  isCorrect = !isEmpty && detected?.toUpperCase() === correctAnswer
+                                } else if (q?.type === 'ms') {
+                                  const correctLabels = (q.options || [])
+                                    .map((o: any, j: number) => o.correct ? String.fromCharCode(65 + j) : '')
+                                    .filter(Boolean).sort().join(',')
+                                  const detectedLabels = (detected || '')
+                                    .split(',').map((l: string) => l.trim().toUpperCase())
+                                    .filter(Boolean).sort().join(',')
+                                  correctAnswer = correctLabels
+                                  isCorrect = !isEmpty && correctLabels === detectedLabels
+                                } else if (q?.type === 'des') {
+                                  correctAnswer = 'Respuesta escrita'
+                                  isCorrect = !isEmpty && (detected?.length || 0) > 5
+                                }
+                                
+                                return (
+                                  <span
+                                    key={qIdx}
+                                    className={`px-1.5 py-0.5 rounded text-xs font-medium ${
+                                      isEmpty 
+                                        ? 'bg-gray-300 text-gray-600 dark:bg-gray-600 dark:text-gray-300' 
+                                        : isCorrect 
+                                          ? 'bg-green-200 text-green-800 dark:bg-green-800 dark:text-green-200' 
+                                          : 'bg-red-200 text-red-800 dark:bg-red-800 dark:text-red-200'
+                                    }`}
+                                    title={`P${qNum} (${q?.type || '?'}): ${isEmpty ? 'Sin respuesta' : detected} ${isEmpty ? '' : isCorrect ? '✅ Correcto' : `❌ Esperado: ${correctAnswer}`}`}
+                                  >
+                                    {qNum}:{isEmpty ? '-' : (q?.type === 'des' ? '✍️' : detected)}
+                                  </span>
+                                )
+                              })}
+                            </div>
+                          )
+                        })()}
                       </td>
                       <td className="py-1 text-center">
                         {g.saved ? (

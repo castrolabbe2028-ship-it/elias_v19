@@ -710,7 +710,48 @@ export default function TestViewDialog({ open, onOpenChange, test, onReview }: P
   const header = `${num}. ${qd.prompt}${ptsLabel}`
         const keyPointsFromSample = (txt?: string): string[] => {
           if (!txt) return []
-          // 1) limpiar encabezados conocidos
+          
+          // Nuevo formato con RESPUESTA CORRECTA y RÚBRICA
+          const hasNewFormat = txt.includes('RESPUESTA CORRECTA:') || txt.includes('RÚBRICA:')
+          
+          if (hasNewFormat) {
+            const bullets: string[] = []
+            
+            // Extraer sección de respuesta correcta
+            const respMatch = txt.match(/RESPUESTA CORRECTA:\s*([\s\S]*?)(?=RÚBRICA:|$)/i)
+            if (respMatch) {
+              const respLines = respMatch[1].split('\n')
+                .map(l => l.replace(/^[•\-]\s*/, '').trim())
+                .filter(l => l && !l.match(/^(Operación|Paso \d|Resultado|Procedimiento):/i))
+              
+              // Extraer el resultado o respuesta principal
+              const resultLine = respLines.find(l => l.match(/^(Resultado|=)/i) || l.includes('='))
+              if (resultLine) {
+                bullets.push(`✓ ${resultLine.replace(/^Resultado:\s*/i, 'Respuesta: ')}`)
+              } else if (respLines.length > 0) {
+                // Tomar las líneas de operación/resultado
+                respLines.slice(0, 3).forEach(l => {
+                  if (l.includes(':')) bullets.push(`✓ ${l}`)
+                  else bullets.push(`✓ ${l}`)
+                })
+              }
+            }
+            
+            // Extraer rúbrica de puntaje
+            const rubricMatch = txt.match(/RÚBRICA:\s*([\s\S]*?)$/i)
+            if (rubricMatch) {
+              bullets.push('') // Línea en blanco para separar
+              bullets.push('PUNTAJE PARCIAL:')
+              const rubricLines = rubricMatch[1].split('\n')
+                .map(l => l.replace(/^[•\-]\s*/, '').trim())
+                .filter(l => l && l.match(/^\d+%:/))
+              rubricLines.forEach(l => bullets.push(l))
+            }
+            
+            return bullets.filter(b => b !== undefined).slice(0, 8)
+          }
+          
+          // 1) Formato antiguo: limpiar encabezados conocidos
           let cleaned = txt
             .replace(/(^|\s)respuesta\s+esperada\s*:\s*/i, ' ')
             .replace(/se\s+espera\s+que\s+el\s+estudiante\s+/i, '')

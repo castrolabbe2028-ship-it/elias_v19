@@ -21,6 +21,10 @@ const GenerateEvaluationInputSchema = z.object({
   questionCount: z.number().optional().describe('Number of questions to generate (default: 15)'),
   timeLimit: z.number().optional().describe('Time limit in seconds (default: 120)'),
   course: z.string().optional().describe('The course/grade level for age-appropriate content.'),
+  // Cantidades específicas por tipo de pregunta
+  tfCount: z.number().optional().describe('Number of True/False questions'),
+  mcCount: z.number().optional().describe('Number of Multiple Choice questions'),
+  msCount: z.number().optional().describe('Number of Multiple Selection questions'),
 });
 type GenerateEvaluationInput = z.infer<typeof GenerateEvaluationInputSchema>;
 
@@ -106,10 +110,64 @@ export async function generateEvaluationContent(input: GenerateEvaluationInput):
           : `\n📋 TOPIC GUIDANCE:\n${input.topicDescription}\nUse this description to focus the questions.`)
       : '';
     
-    // Distribuir tipos de preguntas equitativamente
-    const tfCount = Math.round(questionCount / 3);
-    const mcCount = Math.round((questionCount - tfCount) / 2);
-    const msCount = questionCount - tfCount - mcCount;
+    // Distribuir tipos de preguntas: usar cantidades específicas si se proporcionan, sino distribuir equitativamente
+    const hasSpecificCounts = (input.tfCount !== undefined && input.tfCount > 0) || 
+                               (input.mcCount !== undefined && input.mcCount > 0) || 
+                               (input.msCount !== undefined && input.msCount > 0);
+    
+    let tfCount: number, mcCount: number, msCount: number;
+    
+    if (hasSpecificCounts) {
+      // Usar cantidades específicas del usuario
+      tfCount = input.tfCount || 0;
+      mcCount = input.mcCount || 0;
+      msCount = input.msCount || 0;
+      console.log('[generateEvaluationContent] 📊 Usando cantidades específicas:', { tfCount, mcCount, msCount });
+    } else {
+      // Distribución automática equitativa
+      tfCount = Math.round(questionCount / 3);
+      mcCount = Math.round((questionCount - tfCount) / 2);
+      msCount = questionCount - tfCount - mcCount;
+      console.log('[generateEvaluationContent] 📊 Distribución automática:', { tfCount, mcCount, msCount });
+    }
+    
+    // Detectar si es matemáticas, física u otra ciencia exacta para generar ejercicios
+    const isExactScience = /matem[aá]tica|math|algebra|geometr[ií]a|aritm[eé]tica|c[aá]lculo|ecuacion|fracci[oó]n|porcentaje|trigonometr|sumas?|restas?|multiplic|divisi|f[ií]sica|physics|mec[aá]nica|n[uú]mero/i.test(topic + ' ' + input.bookTitle);
+    
+    console.log('[generateEvaluationContent] 🔢 Detección ciencia exacta:', { topic, bookTitle: input.bookTitle, isExactScience });
+    
+    const exerciseInstructions = isExactScience ? (isEs 
+      ? `\n\n🔢 OBLIGATORIO - EVALUACIÓN DE CÁLCULO:
+Esta es una evaluación de matemáticas/física sobre "${topic}". TODAS las preguntas DEBEN ser EJERCICIOS PRÁCTICOS con números y cálculos reales.
+
+EJEMPLOS CORRECTOS para "${topic}":
+- V/F: "Si tengo 45 manzanas y regalo 18, me quedan 27 manzanas." (Verdadero)
+- V/F: "El resultado de 234 + 178 es 402." (Falso, es 412)
+- Alternativas: "María tiene $150. Gasta $67 en un libro. ¿Cuánto dinero le queda?" A) $73 B) $83 C) $93 D) $103
+- Selección múltiple: "¿Cuáles operaciones dan como resultado 50?" A) 25+25 B) 100-50 C) 30+15 D) 60-10
+
+❌ NO GENERES preguntas como:
+- "Los conceptos de sumas y restas son fundamentales para el aprendizaje"
+- "¿Qué es fundamental para comprender sumas y restas?"
+- "El estudio de sumas requiere práctica constante"
+
+✅ GENERA SOLO ejercicios con números y operaciones matemáticas.`
+      : `\n\n🔢 MANDATORY - CALCULATION EVALUATION:
+This is a math/physics evaluation about "${topic}". ALL questions MUST be PRACTICAL EXERCISES with real numbers and calculations.
+
+CORRECT EXAMPLES for "${topic}":
+- T/F: "If I have 45 apples and give away 18, I have 27 left." (True)
+- T/F: "The result of 234 + 178 is 402." (False, it's 412)
+- Multiple choice: "Mary has $150. She spends $67 on a book. How much money does she have left?" A) $73 B) $83 C) $93 D) $103
+- Multiple selection: "Which operations result in 50?" A) 25+25 B) 100-50 C) 30+15 D) 60-10
+
+❌ DO NOT GENERATE questions like:
+- "The concepts of addition and subtraction are fundamental for learning"
+- "What is fundamental to understand addition and subtraction?"
+- "Studying addition requires constant practice"
+
+✅ GENERATE ONLY exercises with numbers and mathematical operations.`)
+    : '';
     
     // =====================================================================
     // PRIORIDAD 1: OpenRouter (más confiable y económico)
@@ -120,16 +178,26 @@ export async function generateEvaluationContent(input: GenerateEvaluationInput):
       
       if (openRouterClient) {
         try {
+          // Instrucciones del sistema con énfasis en ejercicios para ciencias exactas
+          const mathSystemNote = isExactScience ? (isEs
+            ? `\n\n⚠️ CRÍTICO: Esta es una evaluación de MATEMÁTICAS/FÍSICA. TODAS las preguntas DEBEN ser EJERCICIOS con NÚMEROS y CÁLCULOS. 
+NO generes preguntas teóricas como "Es importante estudiar..." o "El primer paso es...".
+SOLO genera ejercicios matemáticos concretos con operaciones numéricas.`
+            : `\n\n⚠️ CRITICAL: This is a MATH/PHYSICS evaluation. ALL questions MUST be EXERCISES with NUMBERS and CALCULATIONS.
+DO NOT generate theoretical questions like "It is important to study..." or "The first step is...".
+ONLY generate concrete mathematical exercises with numerical operations.`)
+          : '';
+          
           const systemPrompt = isEs 
-            ? `Eres un experto educador. Genera evaluaciones educativas de alta calidad con preguntas variadas, ADAPTADAS AL NIVEL DEL ESTUDIANTE.
+            ? `Eres un experto educador. Genera evaluaciones educativas de alta calidad con preguntas variadas, ADAPTADAS AL NIVEL DEL ESTUDIANTE.${mathSystemNote}
             
 ${adaptationInstructions}`
-            : `You are an expert educator. Generate high-quality educational evaluations with varied questions, ADAPTED TO THE STUDENT'S LEVEL.
+            : `You are an expert educator. Generate high-quality educational evaluations with varied questions, ADAPTED TO THE STUDENT'S LEVEL.${mathSystemNote}
             
 ${adaptationInstructions}`;
           
           const userPrompt = isEs 
-            ? `Genera una evaluación educativa sobre "${topic}" del libro "${input.bookTitle}"${input.course ? ` para ${input.course}` : ''}.${topicGuidance}
+            ? `Genera una evaluación educativa sobre "${topic}" del libro "${input.bookTitle}"${input.course ? ` para ${input.course}` : ''}.${topicGuidance}${exerciseInstructions}
 
 ${courseContext ? `⚠️ IMPORTANTE: El estudiante tiene aproximadamente ${courseContext.approximateAge} años. Adapta la dificultad y vocabulario de las preguntas a su nivel.` : ''}
 
@@ -153,7 +221,7 @@ IMPORTANTE:
 - ADAPTA el vocabulario y dificultad al nivel del estudiante
 - Genera contenido educativo real y variado
 - Responde SOLO con JSON válido, sin texto adicional`
-            : `Generate an educational evaluation about "${topic}" from the book "${input.bookTitle}"${input.course ? ` for ${input.course}` : ''}.${topicGuidance}
+            : `Generate an educational evaluation about "${topic}" from the book "${input.bookTitle}"${input.course ? ` for ${input.course}` : ''}.${topicGuidance}${exerciseInstructions}
 
 ${courseContext ? `⚠️ IMPORTANT: The student is approximately ${courseContext.approximateAge} years old. Adapt the difficulty and vocabulary of the questions to their level.` : ''}
 

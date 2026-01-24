@@ -7,7 +7,7 @@ export const dynamic = 'force-dynamic';
 
 export async function POST(request: NextRequest) {
   try {
-    const { imageBase64, questions, pageNumber, focusQuestionNums } = await request.json();
+    const { imageBase64, questions, pageNumber, focusQuestionNums, focusDevelopment } = await request.json();
 
     if (!imageBase64) {
       return NextResponse.json({ error: 'La imagen es requerida' }, { status: 400 });
@@ -21,7 +21,8 @@ export async function POST(request: NextRequest) {
     }
 
     const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash-exp' });
+    // Usar gemini-2.5-flash - modelo más reciente y disponible
+    const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
 
     // 1. LIMPIEZA CRÍTICA DEL BASE64
     // Si el string viene con "data:image/png;base64,..." hay que quitarlo.
@@ -49,8 +50,14 @@ export async function POST(request: NextRequest) {
     const focusNums: number[] = Array.isArray(focusQuestionNums)
       ? focusQuestionNums.map((n: any) => Number(n)).filter((n: number) => Number.isFinite(n) && n > 0)
       : [];
+    
+    // 🆕 Instrucción especial para desarrollo
+    const devFocusLine = focusDevelopment
+      ? `\n\n🔴 MODO DESARROLLO OBLIGATORIO:\n- Esta pregunta es de DESARROLLO (respuesta escrita)\n- DEBES extraer TODO el texto manuscrito que el estudiante escribió\n- Busca texto, números, operaciones matemáticas (ej: "12 - 4 = 8")\n- Si ves cualquier texto escrito a mano, extráelo completo\n- val debe contener el texto extraído, NO null\n`
+      : '';
+      
     const focusLine = focusNums.length > 0
-      ? `\n\nMODO RE-CHEQUEO (FOCO): Analiza SOLO estas preguntas: ${focusNums.join(', ')}.\n- Ignora el resto del documento.\n- NO devuelvas preguntas fuera del foco.\n- Devuelve exactamente esas preguntas en "answers" (una entrada por cada número solicitado).\n`
+      ? `\n\nMODO RE-CHEQUEO (FOCO): Analiza SOLO estas preguntas: ${focusNums.join(', ')}.\n- Ignora el resto del documento.\n- NO devuelvas preguntas fuera del foco.\n- Devuelve exactamente esas preguntas en "answers" (una entrada por cada número solicitado).${devFocusLine}\n`
       : '';
 
     const totalQuestions = Array.isArray(questions) ? questions.length : 0;
@@ -127,16 +134,27 @@ EJEMPLOS:
 - Marcas en B, C y D → val = "B,C,D", type = "ms"
 - Solo una marca en C → val = "C", type = "ms"
 
-### TIPO 4: DESARROLLO / PROBLEMA (Respuesta escrita)
+### TIPO 4: DESARROLLO / PROBLEMA (Respuesta escrita) ⚠️ MUY IMPORTANTE
 Formato: Pregunta con espacio para escribir respuesta (líneas, cuadro, espacio en blanco)
+- 🔴 CRÍTICO: SIEMPRE incluir las preguntas de desarrollo en "answers"
 - El estudiante escribe texto manuscrito o impreso como respuesta
-- EXTRAE el texto completo de la respuesta del estudiante
+- EXTRAE TODO el texto que el estudiante escribió, incluyendo:
+  * Texto descriptivo ("quedan 8 pájaros", "el resultado es...")
+  * Operaciones matemáticas ("12 - 4 = 8", "5 + 3 = 8")
+  * Números y cálculos escritos
+  * Cualquier palabra o frase visible en el área de respuesta
 - type = "des"
-- val = "[texto extraído de la respuesta]" (máximo 500 caracteres)
-- Si hay operaciones matemáticas, extrae los números y resultados
-- Si no hay respuesta escrita → val = null
-- ⚠️ MUY IMPORTANTE: NO omitas las preguntas de desarrollo, siempre inclúyelas
-- evidence = "TEXTO manuscrito" o "TEXTO impreso" según corresponda
+- val = "[texto extraído completo]" (máximo 500 caracteres)
+- Si hay CUALQUIER texto escrito en el área de respuesta → val = ese texto
+- SOLO si el área está completamente vacía → val = null
+- evidence = "TEXTO: [primeras palabras de la respuesta]"
+
+🔴 EJEMPLO DE DESARROLLO:
+Pregunta: "Había 12 pájaros. Se fueron 4. ¿Cuántos quedaron?"
+Área de respuesta tiene escrito: "quedan 8 pajaros" y "12 - 4 = 8"
+→ { "q": 4, "type": "des", "val": "quedan 8 pajaros. 12 - 4 = 8", "evidence": "TEXTO manuscrito detectado" }
+
+⚠️ NO OMITAS las preguntas de desarrollo - son tan importantes como las demás.
 
 ## 📋 PROTOCOLO DE DETECCIÓN:
 
@@ -189,9 +207,13 @@ Ejemplo: Si C=SÍ y D=SÍ → val = "C,D"
 - "FILL": Rellenado/sombreado → VÁLIDA
 - "EMPTY": Sin marca → val = null
 
-### DETECCIÓN DE ESTUDIANTE:
-- Busca "Nombre:", "Estudiante:" seguido de texto
-- Busca "RUT:" seguido de números
+### DETECCIÓN DE ESTUDIANTE (MUY IMPORTANTE):
+- Busca en la parte SUPERIOR del documento: "Nombre:", "Estudiante:", "Alumno:" seguido de texto manuscrito o impreso
+- El nombre suele estar en las primeras líneas del documento
+- Extrae el NOMBRE COMPLETO (nombre y apellidos) - ejemplo: "María García López", "Juan Pérez"
+- Si ves "Nombre del estudiante:" o similar, extrae lo que está DESPUÉS de los dos puntos
+- NO devuelvas "DEL ESTUDIANTE" - eso es parte del encabezado, busca el nombre REAL escrito
+- Busca "RUT:" seguido de números (opcional)
 
 ## FORMATO DE SALIDA (JSON PURO):
 {
@@ -216,7 +238,11 @@ Ejemplo: Si C=SÍ y D=SÍ → val = "C,D"
 3. ¿Las alternativas están en MAYÚSCULA (A, B, C, D)? ✓
 4. ¿Las preguntas sin marca/respuesta tienen val = null? ✓
 5. ¿La letra reportada corresponde a la OPCIÓN con marca, no a la posición visual? ✓
-6. ¿Extraje el TEXTO COMPLETO de las respuestas de desarrollo? ✓
+6. 🔴 ¿INCLUÍ las preguntas de DESARROLLO (des) y extraje el TEXTO MANUSCRITO? ✓
+7. ¿El texto de desarrollo incluye números, operaciones y palabras escritas? ✓
+
+⚠️ RECORDATORIO FINAL: Las preguntas de desarrollo (des) son OBLIGATORIAS.
+Si ves una pregunta tipo problema con espacio para escribir, DEBES incluirla en "answers" con type="des" y val="[texto que escribió el estudiante]".
 
 Devuelve SOLO JSON válido.
 `;
