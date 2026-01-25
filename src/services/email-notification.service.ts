@@ -44,22 +44,8 @@ export interface EmailNotificationResult {
 
 const SENDER_EMAIL = 'notificaciones@smartstudent.cl';
 
-// Construir la URL base de la API correctamente
-const getApiBaseUrl = () => {
-  const envUrl = process.env.NEXT_PUBLIC_API_URL;
-  // Si la URL del env ya termina en /api, usarla directamente
-  if (envUrl && envUrl.endsWith('/api')) {
-    return envUrl;
-  }
-  // Si hay URL del env pero no termina en /api, agregarla
-  if (envUrl) {
-    return `${envUrl}/api`;
-  }
-  // Fallback a /api relativo
-  return '/api';
-};
-
-const API_BASE_URL = getApiBaseUrl();
+// Usar siempre URL relativa para la API local
+const API_BASE_URL = '/api';
 
 class EmailNotificationService {
   private static instance: EmailNotificationService;
