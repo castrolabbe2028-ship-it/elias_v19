@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-Diciembre%202025-blue?style=for-the-badge" alt="Version" />
+  <img src="https://img.shields.io/badge/version-Enero%202026-blue?style=for-the-badge" alt="Version" />
   <img src="https://img.shields.io/badge/Next.js-16.1-black?style=for-the-badge&logo=next.js" alt="Next.js" />
   <img src="https://img.shields.io/badge/React-18.3-61DAFB?style=for-the-badge&logo=react" alt="React" />
   <img src="https://img.shields.io/badge/TypeScript-5.x-3178C6?style=for-the-badge&logo=typescript" alt="TypeScript" />
@@ -22,7 +22,8 @@
   <a href="#-instalación">Instalación</a> •
   <a href="#-módulos">Módulos</a> •
   <a href="#-tecnologías">Tecnologías</a> •
-  <a href="#-api">API</a>
+  <a href="#-api">API</a> •
+  <a href="#-novedades-enero-2026">Novedades</a>
 </p>
 
 ---
@@ -36,6 +37,41 @@ Transformar la gestión educativa mediante IA generativa (Genkit + Gemini) para 
 
 ---
 
+## 🆕 Novedades Enero 2026
+
+### 🔔 Sistema de Notificaciones Mejorado
+- **Limpieza automática** — Las notificaciones de tareas finalizadas se eliminan automáticamente
+- **Filtrado por profesor** — Cada profesor solo ve las notificaciones de sus propios estudiantes
+- **Corrección de notificaciones cruzadas** — Los profesores ya no reciben comentarios de otros profesores
+- **Sincronización en tiempo real** — Actualización automática de contadores y badges
+
+### 📊 Carga Masiva Firebase Optimizada
+- **Arquitectura de caché dual** — LocalStorage + Firebase para persistencia sin pérdida de datos
+- **Prevención de datos perdidos** — Los datos ya no desaparecen después de la carga masiva
+- **Sincronización inteligente** — El sistema espera la indexación de Firebase antes de recargar
+- **Soporte para campo "Tema"** — Nuevo campo en calificaciones para organizar por tema
+
+### 🎨 Mejoras de Interfaz
+- **UI de evaluaciones** — Campo tema y tipos de preguntas en misma fila en modo manual
+- **Formato de comentarios unificado** — Consistencia visual en comentarios de estudiantes
+- **Tamaño de burbujas optimizado** — Mejor visualización de calificaciones
+- **Hover en badges de tareas** — Información adicional al pasar el cursor
+- **Color de evaluaciones completadas** — Diferenciación visual clara
+
+### 👥 Gestión de Usuarios Dinámica
+- **Asignaciones automáticas** — Sistema autoregenerativo sin valores hardcodeados
+- **Filtrado por sección** — Los profesores ven solo estudiantes de sus secciones asignadas
+- **Exportación mejorada** — Sistema de versiones y validación en exportación/importación
+- **Sincronización de resultados** — Los profesores ven resultados de evaluaciones en tiempo real
+
+### 🛡️ Correcciones Críticas
+- **Eliminación completa de tareas** — Se eliminan de todos los usuarios y notificaciones
+- **Resultados de evaluaciones** — Visibles correctamente para profesores
+- **Cálculo de asistencia global** — Precisión mejorada en reportes
+- **Permisos Firebase** — Reglas de seguridad actualizadas
+
+---
+
 ## ✨ Características
 
 ### 🤖 Inteligencia Artificial
@@ -44,15 +80,16 @@ Transformar la gestión educativa mediante IA generativa (Genkit + Gemini) para 
 - **Evaluaciones Adaptativas** — Preguntas ajustadas al nivel del estudiante
 
 ### 📊 Gestión Académica
-- **Calificaciones** — Sistema completo con carga masiva CSV
+- **Calificaciones** — Sistema completo con carga masiva CSV y Firebase
 - **Asistencia** — Control diario con reportes automáticos
-- **Tareas** — Asignación, seguimiento y calificación
+- **Tareas** — Asignación, seguimiento y calificación mejorada
 - **Libros Digitales** — Biblioteca integrada con OCR
 
 ### 👥 Gestión de Usuarios
 - **Multi-rol** — Admin, Profesor, Estudiante, Apoderado
 - **Firebase Auth** — Autenticación segura
 - **Perfiles Personalizados** — Dashboard adaptado por rol
+- **Asignaciones Dinámicas** — Sistema autoregenerativo de secciones
 
 ### 📈 Reportes y Estadísticas
 - **KPIs en Tiempo Real** — Métricas de rendimiento
@@ -60,8 +97,8 @@ Transformar la gestión educativa mediante IA generativa (Genkit + Gemini) para 
 - **Exportación** — PDF, Excel, Word, PowerPoint
 
 ### 💬 Comunicación
-- **Notificaciones** — Sistema de alertas en tiempo real
-- **Mensajería** — Comunicación entre roles
+- **Notificaciones Inteligentes** — Sistema mejorado con limpieza automática
+- **Mensajería** — Comunicación entre roles sin cruces
 - **Calendario** — Eventos y recordatorios
 
 ---
@@ -289,12 +326,24 @@ npm run firebase:check  # Diagnóstico
 |---------------|--------|
 | Evaluaciones IA | ✅ Completado |
 | Calificaciones | ✅ Completado |
+| Carga Masiva Firebase | ✅ Completado |
 | Asistencia | ✅ Completado |
 | Tareas | ✅ Completado |
 | Comunicaciones | ✅ Completado |
+| Sistema Notificaciones | ✅ Mejorado v2 |
 | Multi-idioma | ✅ Completado |
+| Gestión Usuarios Dinámica | ✅ Completado |
 | PWA | 🔄 En progreso |
 | App Móvil | 📋 Planificado |
+
+---
+
+## 📜 Historial de Versiones
+
+| Versión | Fecha | Destacados |
+|---------|-------|------------|
+| **Enero 2026** | Enero 2026 | Notificaciones mejoradas, carga masiva Firebase optimizada, UI refinada |
+| Diciembre 2025 | Dic 2025 | Sistema base completo, IA Genkit, Firebase Auth |
 
 ---
 
@@ -327,5 +376,5 @@ MIT License - ver [LICENSE](LICENSE) para detalles.
 </p>
 
 <p align="center">
-  <sub>Versión Diciembre 2025 | Smart Student Web</sub>
+  <sub>Versión Enero 2026 | Smart Student Web</sub>
 </p>
