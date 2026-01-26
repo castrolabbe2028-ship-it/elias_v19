@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import nodemailer from 'nodemailer';
 
 /**
  * API para enviar notificaciones por email
@@ -6,19 +7,33 @@ import { NextRequest, NextResponse } from 'next/server';
  * 
  * Correo de envío: notificaciones@smartstudent.cl
  * 
- * Usando Sender.net API (15,000 emails/mes gratis)
+ * Usando Sender.net SMTP (15,000 emails/mes gratis) - PRINCIPAL
  * Fallback: Resend API (3,000 emails/mes gratis)
  */
 
-// Configuración de Sender.net
-const SENDER_API_KEY = process.env.SENDER_API_KEY || '';
+// Configuración de Sender.net SMTP
+const SENDER_SMTP_USER = process.env.SENDER_SMTP_USER || '';
+const SENDER_SMTP_PASS = process.env.SENDER_SMTP_PASS || '';
 // Configuración de Resend (fallback)
 const RESEND_API_KEY = process.env.RESEND_API_KEY || '';
 const FROM_EMAIL = process.env.EMAIL_FROM || 'notificaciones@smartstudent.cl';
 const FROM_NAME = process.env.EMAIL_FROM_NAME || 'Smart Student';
 
+// Crear transporter de nodemailer para Sender.net SMTP
+const createSenderTransporter = () => {
+  return nodemailer.createTransport({
+    host: 'smtp.sender.net',
+    port: 587,
+    secure: false, // TLS
+    auth: {
+      user: SENDER_SMTP_USER,
+      pass: SENDER_SMTP_PASS,
+    },
+  });
+};
+
 /**
- * Envía un email usando Sender.net API
+ * Envía un email usando Sender.net SMTP
  */
 const sendWithSenderNet = async (emailData: {
   from: string;
@@ -29,60 +44,29 @@ const sendWithSenderNet = async (emailData: {
   html: string;
 }): Promise<{ success: boolean; messageId?: string; error?: string }> => {
   try {
-    console.log('📧 [SENDER.NET] Sending to:', emailData.to);
+    console.log('📧 [SENDER.NET SMTP] Sending to:', emailData.to);
     
-    if (!SENDER_API_KEY) {
-      console.warn('⚠️ [SENDER.NET] API key not configured, trying Resend...');
-      return { success: false, error: 'Sender.net API key not configured' };
+    if (!SENDER_SMTP_USER || !SENDER_SMTP_PASS) {
+      console.warn('⚠️ [SENDER.NET] SMTP credentials not configured, trying Resend...');
+      return { success: false, error: 'Sender.net SMTP credentials not configured' };
     }
 
-    // Sender.net transactional email API
-    const response = await fetch('https://api.sender.net/v2/emails', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${SENDER_API_KEY}`,
-        'Accept': 'application/json',
-      },
-      body: JSON.stringify({
-        from: {
-          email: emailData.from,
-          name: emailData.fromName
-        },
-        to: [{
-          email: emailData.to,
-          name: emailData.toName
-        }],
-        subject: emailData.subject,
-        html: emailData.html,
-      }),
+    const transporter = createSenderTransporter();
+    
+    const info = await transporter.sendMail({
+      from: `"${emailData.fromName}" <${emailData.from}>`,
+      to: emailData.to,
+      subject: emailData.subject,
+      html: emailData.html,
     });
 
-    const responseText = await response.text();
-    console.log('📧 [SENDER.NET] Response status:', response.status);
-    console.log('📧 [SENDER.NET] Response:', responseText.substring(0, 200));
-
-    if (response.ok || response.status === 200 || response.status === 201 || response.status === 202) {
-      let result;
-      try {
-        result = JSON.parse(responseText);
-      } catch {
-        result = { id: 'sent' };
-      }
-      console.log('✅ [SENDER.NET] Email sent successfully:', result.id || result.message_id || 'sent');
-      return { 
-        success: true, 
-        messageId: result.id || result.message_id || 'sent' 
-      };
-    } else {
-      console.error('❌ [SENDER.NET] API error:', responseText);
-      return { 
-        success: false, 
-        error: `Sender.net API error: ${response.status} - ${responseText}` 
-      };
-    }
+    console.log('✅ [SENDER.NET SMTP] Email sent successfully:', info.messageId);
+    return { 
+      success: true, 
+      messageId: info.messageId 
+    };
   } catch (error) {
-    console.error('❌ [SENDER.NET] Exception:', error);
+    console.error('❌ [SENDER.NET SMTP] Exception:', error);
     return { 
       success: false, 
       error: error instanceof Error ? error.message : 'Unknown error' 
@@ -197,7 +181,7 @@ export async function POST(request: NextRequest) {
       to,
       subject,
       type,
-      provider: SENDER_API_KEY ? 'sender.net' : 'resend'
+      provider: SENDER_SMTP_USER ? 'sender.net-smtp' : 'resend'
     });
 
     // Generar HTML del email
