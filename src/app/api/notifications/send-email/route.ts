@@ -6,16 +6,92 @@ import { NextRequest, NextResponse } from 'next/server';
  * 
  * Correo de envío: notificaciones@smartstudent.cl
  * 
- * Usando Resend API (3,000 emails/mes gratis)
+ * Usando Sender.net API (15,000 emails/mes gratis)
+ * Fallback: Resend API (3,000 emails/mes gratis)
  */
 
-// Configuración de Resend
+// Configuración de Sender.net
+const SENDER_API_KEY = process.env.SENDER_API_KEY || '';
+// Configuración de Resend (fallback)
 const RESEND_API_KEY = process.env.RESEND_API_KEY || '';
-const FROM_EMAIL = process.env.EMAIL_FROM || 'onboarding@resend.dev';
+const FROM_EMAIL = process.env.EMAIL_FROM || 'notificaciones@smartstudent.cl';
 const FROM_NAME = process.env.EMAIL_FROM_NAME || 'Smart Student';
 
 /**
- * Envía un email usando Resend API
+ * Envía un email usando Sender.net API
+ */
+const sendWithSenderNet = async (emailData: {
+  from: string;
+  fromName: string;
+  to: string;
+  toName: string;
+  subject: string;
+  html: string;
+}): Promise<{ success: boolean; messageId?: string; error?: string }> => {
+  try {
+    console.log('📧 [SENDER.NET] Sending to:', emailData.to);
+    
+    if (!SENDER_API_KEY) {
+      console.warn('⚠️ [SENDER.NET] API key not configured, trying Resend...');
+      return { success: false, error: 'Sender.net API key not configured' };
+    }
+
+    // Sender.net transactional email API
+    const response = await fetch('https://api.sender.net/v2/emails', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${SENDER_API_KEY}`,
+        'Accept': 'application/json',
+      },
+      body: JSON.stringify({
+        from: {
+          email: emailData.from,
+          name: emailData.fromName
+        },
+        to: [{
+          email: emailData.to,
+          name: emailData.toName
+        }],
+        subject: emailData.subject,
+        html: emailData.html,
+      }),
+    });
+
+    const responseText = await response.text();
+    console.log('📧 [SENDER.NET] Response status:', response.status);
+    console.log('📧 [SENDER.NET] Response:', responseText.substring(0, 200));
+
+    if (response.ok || response.status === 200 || response.status === 201 || response.status === 202) {
+      let result;
+      try {
+        result = JSON.parse(responseText);
+      } catch {
+        result = { id: 'sent' };
+      }
+      console.log('✅ [SENDER.NET] Email sent successfully:', result.id || result.message_id || 'sent');
+      return { 
+        success: true, 
+        messageId: result.id || result.message_id || 'sent' 
+      };
+    } else {
+      console.error('❌ [SENDER.NET] API error:', responseText);
+      return { 
+        success: false, 
+        error: `Sender.net API error: ${response.status} - ${responseText}` 
+      };
+    }
+  } catch (error) {
+    console.error('❌ [SENDER.NET] Exception:', error);
+    return { 
+      success: false, 
+      error: error instanceof Error ? error.message : 'Unknown error' 
+    };
+  }
+};
+
+/**
+ * Envía un email usando Resend API (fallback)
  */
 const sendWithResend = async (emailData: {
   from: string;
@@ -116,11 +192,12 @@ export async function POST(request: NextRequest) {
 
     const senderEmail = FROM_EMAIL;
 
-    console.log('📧 [RESEND] Processing email request:', {
+    console.log('📧 [EMAIL] Processing email request:', {
       from: senderEmail,
       to,
       subject,
-      type
+      type,
+      provider: SENDER_API_KEY ? 'sender.net' : 'resend'
     });
 
     // Generar HTML del email
@@ -136,29 +213,39 @@ export async function POST(request: NextRequest) {
       feedback: metadata?.feedback
     });
 
-    // Enviar con Resend API
-    const result = await sendWithResend({
+    const emailPayload = {
       from: senderEmail,
       fromName: FROM_NAME,
       to: to,
       toName: toName || 'Usuario',
       subject: subject,
       html: htmlContent
-    });
+    };
+
+    // 🆕 Intentar primero con Sender.net, fallback a Resend
+    let result = await sendWithSenderNet(emailPayload);
+    let usedProvider = 'sender.net';
+    
+    if (!result.success && RESEND_API_KEY) {
+      console.log('📧 [EMAIL] Sender.net failed, trying Resend as fallback...');
+      result = await sendWithResend(emailPayload);
+      usedProvider = 'resend';
+    }
 
     if (result.success) {
-      console.log('✅ [RESEND] Email sent successfully:', result.messageId);
+      console.log(`✅ [EMAIL] Email sent successfully via ${usedProvider}:`, result.messageId);
       return NextResponse.json({
         success: true,
-        message: 'Email sent successfully via Resend',
-        messageId: result.messageId
+        message: `Email sent successfully via ${usedProvider}`,
+        messageId: result.messageId,
+        provider: usedProvider
       });
     } else {
-      console.error('❌ [RESEND] Failed to send email:', result.error);
+      console.error(`❌ [EMAIL] Failed to send email:`, result.error);
       return NextResponse.json(
         { 
           success: false,
-          error: 'Failed to send email via Resend', 
+          error: 'Failed to send email', 
           details: result.error
         },
         { status: 500 }
