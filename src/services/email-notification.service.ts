@@ -47,6 +47,21 @@ const SENDER_EMAIL = 'notificaciones@smartstudent.cl';
 // Usar siempre URL relativa para la API local
 const API_BASE_URL = '/api';
 
+// Rate limiter para evitar errores 429 de Resend (max 2 req/seg)
+let lastEmailSentTime = 0;
+const MIN_EMAIL_INTERVAL_MS = 600; // 600ms entre cada email
+
+const waitForRateLimit = async (): Promise<void> => {
+  const now = Date.now();
+  const timeSinceLastEmail = now - lastEmailSentTime;
+  if (timeSinceLastEmail < MIN_EMAIL_INTERVAL_MS) {
+    const waitTime = MIN_EMAIL_INTERVAL_MS - timeSinceLastEmail;
+    console.log(`📧 [EMAIL SERVICE] Rate limiting: waiting ${waitTime}ms`);
+    await new Promise(resolve => setTimeout(resolve, waitTime));
+  }
+  lastEmailSentTime = Date.now();
+};
+
 class EmailNotificationService {
   private static instance: EmailNotificationService;
 
@@ -217,6 +232,9 @@ class EmailNotificationService {
     try {
       console.log(`📧 [EMAIL SERVICE] Sending email notification to ${recipientEmail}`);
       
+      // Esperar rate limit antes de enviar
+      await waitForRateLimit();
+      
       // Llamar a la API para enviar el email
       const response = await fetch(`${API_BASE_URL}/notifications/send-email`, {
         method: 'POST',
@@ -265,6 +283,7 @@ class EmailNotificationService {
 
   /**
    * Envía notificaciones por email a múltiples usuarios
+   * El rate limiting se aplica automáticamente en sendEmailNotification
    */
   async sendBulkEmailNotifications(
     userIds: string[],

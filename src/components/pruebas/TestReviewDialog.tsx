@@ -160,6 +160,8 @@ export default function TestReviewDialog({ open, onOpenChange, test }: Props) {
     questionsInOCR?: number // 🆕 Preguntas encontradas en OCR
   }>>([])
   const [savingGrades, setSavingGrades] = useState(false)
+  // 🆕 Respuestas correctas de la pauta (para mostrar badges correctos)
+  const [pautaAnswers, setPautaAnswers] = useState<Map<number, string | null>>(new Map())
 
   useEffect(() => {
     if (!open) {
@@ -436,8 +438,10 @@ export default function TestReviewDialog({ open, onOpenChange, test }: Props) {
 
           if (keyFile) {
             try {
+              console.log('[PAUTA] 📋 Analizando pauta...')
               const keyImages = await renderPdfToImages(keyFile)
               if (keyImages.length > 0) {
+                console.log(`[PAUTA] 📄 Pauta tiene ${keyImages.length} páginas`)
                 const keyResp = await fetch('/api/analyze-ocr-vision', {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
@@ -450,6 +454,8 @@ export default function TestReviewDialog({ open, onOpenChange, test }: Props) {
                   }),
                 })
                 const keyData = await keyResp.json()
+                console.log('[PAUTA] 🔍 Respuesta completa de análisis de pauta:', JSON.stringify(keyData, null, 2).substring(0, 2000))
+                
                 if (keyData?.success && keyData?.analysis?.pages && Array.isArray(keyData.analysis.pages)) {
                   keyQuestionsFound = typeof keyData.analysis.questionsFoundInDocument === 'number'
                     ? keyData.analysis.questionsFoundInDocument
@@ -458,6 +464,7 @@ export default function TestReviewDialog({ open, onOpenChange, test }: Props) {
                   // Unir respuestas de todas las páginas de la pauta
                   for (const pg of keyData.analysis.pages) {
                     const answers = Array.isArray(pg?.answers) ? pg.answers : []
+                    console.log(`[PAUTA] 📄 Página ${pg.pageNum || pg.pageIndex}: ${answers.length} respuestas`)
                     for (const a of answers) {
                       // 🔧 FIX: API usa "q" y "val", no "questionNum" y "detected"
                       const qn = Number(a?.q ?? a?.questionNum)
@@ -465,6 +472,7 @@ export default function TestReviewDialog({ open, onOpenChange, test }: Props) {
                       const rawVal = a?.val ?? a?.detected
                       const det = rawVal === null || rawVal === undefined ? null : String(rawVal).trim()
                       const pts = (a?.points === null || a?.points === undefined) ? null : Number(a.points)
+                      console.log(`[PAUTA] ✅ P${qn}: respuesta correcta = "${det}" (puntos: ${pts})`)
                       if (det) {
                         if (!keyAnswerByQuestion.get(qn)) keyAnswerByQuestion.set(qn, det)
                       } else {
@@ -477,6 +485,14 @@ export default function TestReviewDialog({ open, onOpenChange, test }: Props) {
                       }
                     }
                   }
+                  
+                  // Log final del mapa de respuestas correctas
+                  console.log('[PAUTA] 📊 Resumen de respuestas correctas de la pauta:')
+                  for (const [qn, val] of keyAnswerByQuestion.entries()) {
+                    console.log(`  P${qn}: "${val}"`)
+                  }
+                } else {
+                  console.warn('[PAUTA] ⚠️ No se obtuvieron respuestas válidas de la pauta')
                 }
               }
             } catch (keyErr) {
@@ -794,7 +810,9 @@ export default function TestReviewDialog({ open, onOpenChange, test }: Props) {
               }
 
               // Armar lista de detectadas (TODAS las preguntas del test)
+              console.log(`[CALIFICAR] 🔎 Respuestas detectadas del estudiante "${studentName}":`)
               for (const [qn, det] of answerByQuestion.entries()) {
+                console.log(`  P${qn}: "${det}"`)
                 detectedAnswersList.push({ questionNum: qn, detected: det })
               }
               detectedAnswersList.sort((a, b) => a.questionNum - b.questionNum)
@@ -813,6 +831,19 @@ export default function TestReviewDialog({ open, onOpenChange, test }: Props) {
                 totalPossiblePoints = typeof totalPtsLocal === 'number' && totalPtsLocal > 0 ? totalPtsLocal : 0
               }
 
+              // 📊 DEBUG: Mostrar estado de pauta y preguntas del test
+              console.log(`[CALIFICAR] 🧑‍🎓 CALIFICANDO: ${studentName}`)
+              console.log(`[CALIFICAR] 📋 Preguntas a evaluar: ${denom}`)
+              console.log(`[CALIFICAR] 🔑 Pauta cargada: ${keyAnswerByQuestion.size > 0 ? 'SÍ' : 'NO'}`)
+              if (keyAnswerByQuestion.size > 0) {
+                console.log(`[CALIFICAR] 📊 Respuestas de pauta:`, Object.fromEntries(keyAnswerByQuestion.entries()))
+              }
+              console.log(`[CALIFICAR] 📖 Preguntas del test:`, (test?.questions || []).map((q: any, i: number) => ({
+                num: i + 1,
+                type: q?.type,
+                answer: q?.type === 'tf' ? (q?.answer ? 'V (true)' : 'F (false)') : q?.correctIndex !== undefined ? String.fromCharCode(65 + q.correctIndex) : 'N/A'
+              })))
+              
               for (let qNum = 1; qNum <= denom; qNum++) {
                 const detected = answerByQuestion.get(qNum)
                 const qDef = (test?.questions || [])[qNum - 1] as any
@@ -822,7 +853,10 @@ export default function TestReviewDialog({ open, onOpenChange, test }: Props) {
                   console.log(`[Vision] 🔍 P${qNum} (DES): detected="${detected}" len=${detected?.length || 0}`)
                 }
                 
-                if (!detected) continue
+                if (!detected) {
+                  console.log(`[CALIFICAR] ⬜ P${qNum}: sin respuesta del estudiante`)
+                  continue
+                }
 
                 // Puntos: preferir pauta -> PDF estudiante -> fallback por tipo
                 const kp = keyPointsByQuestion.get(qNum)
@@ -838,7 +872,13 @@ export default function TestReviewDialog({ open, onOpenChange, test }: Props) {
 
                 if (keyAnswerByQuestion.size > 0) {
                   const correct = keyAnswerByQuestion.get(qNum)
-                  if (correct && String(detected).trim().toUpperCase() === String(correct).trim().toUpperCase()) {
+                  const studentAnswer = String(detected).trim().toUpperCase()
+                  const correctAnswer = String(correct || '').trim().toUpperCase()
+                  const isCorrect = correct && studentAnswer === correctAnswer
+                  
+                  console.log(`[CALIFICAR] 📝 P${qNum}: estudiante="${studentAnswer}" vs pauta="${correctAnswer}" → ${isCorrect ? '✅ CORRECTA' : '❌ INCORRECTA'}`)
+                  
+                  if (isCorrect) {
                     studentCorrect++
                     studentPoints += questionPts
                   }
@@ -846,16 +886,23 @@ export default function TestReviewDialog({ open, onOpenChange, test }: Props) {
                 }
 
                 // Sin pauta: usar claves del test
-                if (!q) continue
+                if (!q) {
+                  console.log(`[CALIFICAR] ⚠️ P${qNum}: pregunta NO DEFINIDA en el test (q es ${typeof q})`)
+                  continue
+                }
                 if (q?.type === 'tf') {
                   const correct = q.answer ? 'V' : 'F'
-                  if (String(detected).toUpperCase() === correct) {
+                  const isCorrect = String(detected).toUpperCase() === correct
+                  console.log(`[CALIFICAR] 📝 P${qNum} (tf): estudiante="${String(detected).toUpperCase()}" vs test="${correct}" (q.answer=${q.answer}) → ${isCorrect ? '✅' : '❌'}`)
+                  if (isCorrect) {
                     studentCorrect++
                     studentPoints += questionPts
                   }
                 } else if (q?.type === 'mc') {
                   const correct = String.fromCharCode(65 + q.correctIndex)
-                  if (String(detected).toUpperCase() === correct) {
+                  const isCorrect = String(detected).toUpperCase() === correct
+                  console.log(`[CALIFICAR] 📝 P${qNum} (mc): estudiante="${String(detected).toUpperCase()}" vs test="${correct}" → ${isCorrect ? '✅' : '❌'}`)
+                  if (isCorrect) {
                     studentCorrect++
                     studentPoints += questionPts
                   }
@@ -1595,9 +1642,69 @@ export default function TestReviewDialog({ open, onOpenChange, test }: Props) {
       }
       
       // ============================================
-      // PASO 2: Gemini Vision (analiza TODAS las páginas)
+      // PASO 2: Analizar PAUTA si existe (obtener respuestas correctas)
       // ============================================
-      console.log('[Full Analysis] 🤖 PASO 2: Analizando con Gemini Vision...')
+      let keyAnswerByQuestion = new Map<number, string | null>()
+      
+      if (keyFile) {
+        console.log('[Full Analysis] 📋 PASO 2: Analizando PAUTA para obtener respuestas correctas...')
+        setAnalysisProgress({ step: 'Analizando pauta...', percent: 40 })
+        
+        try {
+          const keyImages = await renderPdfToImages(keyFile)
+          console.log(`[Full Analysis] 📄 Pauta tiene ${keyImages.length} páginas`)
+          
+          for (let k = 0; k < keyImages.length; k++) {
+            const keyPage = keyImages[k]
+            const base64Data = keyPage.dataUrl.split(',')[1]
+            
+            const keyResp = await fetch('/api/analyze-ocr', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                imageBase64: base64Data,
+                questions: test?.questions || [],
+                pageNumber: k + 1,
+                isPauta: true // Indicar que es pauta
+              })
+            })
+            
+            const keyData = await keyResp.json()
+            console.log(`[Full Analysis] 📋 Pauta página ${k + 1}:`, JSON.stringify(keyData, null, 2).substring(0, 500))
+            
+            if (keyData?.success && keyData?.analysis?.answers) {
+              for (const a of keyData.analysis.answers) {
+                const qn = Number(a?.q ?? a?.questionNum)
+                if (!Number.isFinite(qn) || qn <= 0) continue
+                const val = a?.val ?? a?.detected
+                if (val !== null && val !== undefined && String(val).length > 0) {
+                  if (!keyAnswerByQuestion.has(qn)) {
+                    keyAnswerByQuestion.set(qn, String(val).trim())
+                    console.log(`[Full Analysis] ✅ Pauta P${qn}: respuesta correcta = "${val}"`)
+                  }
+                }
+              }
+            }
+          }
+          
+          console.log(`[Full Analysis] 📊 Pauta analizada: ${keyAnswerByQuestion.size} respuestas correctas detectadas`)
+          for (const [qn, val] of keyAnswerByQuestion.entries()) {
+            console.log(`  P${qn}: "${val}"`)
+          }
+          // 🆕 Guardar en estado para que los badges usen estas respuestas
+          setPautaAnswers(new Map(keyAnswerByQuestion))
+        } catch (keyErr) {
+          console.warn('[Full Analysis] ⚠️ Error analizando pauta:', keyErr)
+        }
+      } else {
+        console.log('[Full Analysis] ℹ️ Sin pauta - usando respuestas del test')
+        setPautaAnswers(new Map()) // Limpiar pauta anterior
+      }
+      
+      // ============================================
+      // PASO 3: Gemini Vision (analiza TODAS las páginas de estudiantes)
+      // ============================================
+      console.log('[Full Analysis] 🤖 PASO 3: Analizando pruebas de estudiantes con Gemini Vision...')
       
       let allPages: Array<{ pageNum: number; dataUrl: string }> = []
       
@@ -1681,15 +1788,45 @@ export default function TestReviewDialog({ open, onOpenChange, test }: Props) {
                   continue
                 }
                 
+                // 🆕 PRIMERO: Usar respuesta de la PAUTA si existe
+                if (keyAnswerByQuestion.size > 0 && keyAnswerByQuestion.has(qNum)) {
+                  const pautaAnswer = keyAnswerByQuestion.get(qNum)
+                  const studentAnswer = String(detected).toUpperCase().trim()
+                  const correctAnswer = String(pautaAnswer || '').toUpperCase().trim()
+                  
+                  // Para selección múltiple, ordenar las opciones antes de comparar
+                  let isCorrect = false
+                  if (type === 'ms') {
+                    const studentLabels = studentAnswer.split(',').map(l => l.trim()).filter(Boolean).sort().join(',')
+                    const correctLabels = correctAnswer.split(',').map(l => l.trim()).filter(Boolean).sort().join(',')
+                    isCorrect = studentLabels === correctLabels
+                  } else {
+                    isCorrect = studentAnswer === correctAnswer
+                  }
+                  
+                  console.log(`[Full Analysis] 🎯 P${qNum} PAUTA: estudiante="${studentAnswer}" vs pauta="${correctAnswer}" → ${isCorrect ? '✅ CORRECTA' : '❌ INCORRECTA'}`)
+                  
+                  if (isCorrect) {
+                    aiCorrect++
+                  }
+                  continue // Ya procesamos con pauta, no usar lógica del test
+                }
+                
+                // FALLBACK: Sin pauta, usar respuestas del test
                 if (type === 'tf') {
                   const correctAnswer = q.answer ? 'V' : 'F'
                   const detectedUpper = String(detected).toUpperCase().trim()
-                  if (detectedUpper === correctAnswer || (detectedUpper === 'VERDADERO' && correctAnswer === 'V') || (detectedUpper === 'FALSO' && correctAnswer === 'F')) {
+                  const isCorrect = detectedUpper === correctAnswer || (detectedUpper === 'VERDADERO' && correctAnswer === 'V') || (detectedUpper === 'FALSO' && correctAnswer === 'F')
+                  console.log(`[Full Analysis] 🔍 P${qNum} TF (test): q.answer=${q.answer} (${typeof q.answer}) → correctAnswer="${correctAnswer}", detected="${detectedUpper}", isCorrect=${isCorrect}`)
+                  if (isCorrect) {
                     aiCorrect++
                   }
                 } else if (type === 'mc') {
                   const correctLetter = String.fromCharCode(65 + (q.correctIndex || 0))
-                  if (String(detected).toUpperCase().trim() === correctLetter) {
+                  const detectedUpper = String(detected).toUpperCase().trim()
+                  const isCorrect = detectedUpper === correctLetter
+                  console.log(`[Full Analysis] 🔍 P${qNum} MC (test): q.correctIndex=${q.correctIndex} → correctLetter="${correctLetter}", detected="${detectedUpper}", isCorrect=${isCorrect}`)
+                  if (isCorrect) {
                     aiCorrect++
                   }
                 } else if (type === 'ms') {
@@ -1698,7 +1835,9 @@ export default function TestReviewDialog({ open, onOpenChange, test }: Props) {
                     .filter(Boolean).sort().join(',')
                   const detectedLabels = String(detected).split(',')
                     .map((l: string) => l.trim().toUpperCase()).filter(Boolean).sort().join(',')
-                  if (correctLabels === detectedLabels) {
+                  const isCorrect = correctLabels === detectedLabels
+                  console.log(`[Full Analysis] 🔍 P${qNum} MS (test): correctLabels="${correctLabels}", detectedLabels="${detectedLabels}", isCorrect=${isCorrect}`)
+                  if (isCorrect) {
                     aiCorrect++
                   }
                 } else if (type === 'des') {
@@ -3289,24 +3428,48 @@ export default function TestReviewDialog({ open, onOpenChange, test }: Props) {
                                 let correctAnswer = '?'
                                 let isCorrect = false
                                 
-                                if (q?.type === 'tf') {
-                                  correctAnswer = q.answer ? 'V' : 'F'
-                                  isCorrect = !isEmpty && detected?.toUpperCase() === correctAnswer
-                                } else if (q?.type === 'mc') {
-                                  correctAnswer = String.fromCharCode(65 + (q.correctIndex || 0))
-                                  isCorrect = !isEmpty && detected?.toUpperCase() === correctAnswer
-                                } else if (q?.type === 'ms') {
-                                  const correctLabels = (q.options || [])
-                                    .map((o: any, j: number) => o.correct ? String.fromCharCode(65 + j) : '')
-                                    .filter(Boolean).sort().join(',')
-                                  const detectedLabels = (detected || '')
-                                    .split(',').map((l: string) => l.trim().toUpperCase())
-                                    .filter(Boolean).sort().join(',')
-                                  correctAnswer = correctLabels
-                                  isCorrect = !isEmpty && correctLabels === detectedLabels
-                                } else if (q?.type === 'des') {
-                                  correctAnswer = 'Respuesta escrita'
-                                  isCorrect = !isEmpty && (detected?.length || 0) > 5
+                                // 🆕 PRIMERO: Usar respuestas de la PAUTA si existen
+                                if (pautaAnswers.size > 0 && pautaAnswers.has(qNum)) {
+                                  const pautaAnswer = pautaAnswers.get(qNum)
+                                  correctAnswer = String(pautaAnswer || '').toUpperCase()
+                                  const studentAnswer = String(detected || '').toUpperCase().trim()
+                                  
+                                  // Para selección múltiple, ordenar antes de comparar
+                                  if (q?.type === 'ms') {
+                                    const studentLabels = studentAnswer.split(',').map(l => l.trim()).filter(Boolean).sort().join(',')
+                                    const correctLabels = correctAnswer.split(',').map(l => l.trim()).filter(Boolean).sort().join(',')
+                                    isCorrect = !isEmpty && studentLabels === correctLabels
+                                  } else if (q?.type === 'des') {
+                                    // Desarrollo: si hay respuesta significativa, es correcta
+                                    isCorrect = !isEmpty && (detected?.length || 0) > 5
+                                  } else {
+                                    isCorrect = !isEmpty && studentAnswer === correctAnswer
+                                  }
+                                  
+                                  if (qNum === 1) {
+                                    console.log(`[UI-BADGE] 🎯 P1 PAUTA: detected="${studentAnswer}" vs pauta="${correctAnswer}" → isCorrect=${isCorrect}`)
+                                  }
+                                } else {
+                                  // FALLBACK: Sin pauta, usar respuestas del test
+                                  if (q?.type === 'tf') {
+                                    correctAnswer = q.answer ? 'V' : 'F'
+                                    isCorrect = !isEmpty && detected?.toUpperCase() === correctAnswer
+                                  } else if (q?.type === 'mc') {
+                                    correctAnswer = String.fromCharCode(65 + (q.correctIndex || 0))
+                                    isCorrect = !isEmpty && detected?.toUpperCase() === correctAnswer
+                                  } else if (q?.type === 'ms') {
+                                    const correctLabels = (q.options || [])
+                                      .map((o: any, j: number) => o.correct ? String.fromCharCode(65 + j) : '')
+                                      .filter(Boolean).sort().join(',')
+                                    const detectedLabels = (detected || '')
+                                      .split(',').map((l: string) => l.trim().toUpperCase())
+                                      .filter(Boolean).sort().join(',')
+                                    correctAnswer = correctLabels
+                                    isCorrect = !isEmpty && correctLabels === detectedLabels
+                                  } else if (q?.type === 'des') {
+                                    correctAnswer = 'Respuesta escrita'
+                                    isCorrect = !isEmpty && (detected?.length || 0) > 5
+                                  }
                                 }
                                 
                                 return (
