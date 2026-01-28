@@ -14,7 +14,7 @@ import nodemailer from 'nodemailer';
  */
 
 // Configuración de Mailrelay API - PRINCIPAL (80,000 emails/mes)
-const MAILRELAY_API_KEY = process.env.MAILRELAY_API_KEY || '_kszGyMZqGazPP8UpnFqCryzNmshyDvkXyDwv__y';
+const MAILRELAY_API_KEY = process.env.MAILRELAY_API_KEY || '';
 const MAILRELAY_BASE_URL = process.env.MAILRELAY_BASE_URL || 'https://smartstudent1.ipzmarketing.com';
 
 // Configuración de Sender.net SMTP - FALLBACK 1
